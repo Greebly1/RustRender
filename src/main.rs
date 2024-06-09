@@ -9,7 +9,7 @@ fn main() {
     let win_title : &str = "Rust3D";
     let sleep_time : Duration = Duration::new(0, 50000000);
 
-    //glfw_instance.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
+    //glfw_instance.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi)); <-- I am pretty sure we need this so it doesnt make a opengl context. But with no api provided it throws errors
     //should also inclide window resizable hint
 
     let (mut window, event_loop) = glfw_instance
