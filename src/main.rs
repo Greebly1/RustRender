@@ -2,15 +2,20 @@ use glfw::{Window, Context};
 use std::thread::sleep;
 use std::time::Duration;
 
+//This project utilizes GLFW for windowing, https://www.glfw.org/ 
+//GLFW binaries will be built automatically by rustc https://crates.io/crates/glfw 
+//To build GLFW your machine must have Cmake installed and set in the PATH https://cmake.org/
 fn main() {
     let mut glfw_instance = glfw::init(handle_errors).unwrap();
+
+    let mut frame_counter: u64 = 0;
 
     let (win_width, win_height) : (u32, u32) = (500, 300);
     let win_title : &str = "Rust3D";
     let sleep_time : Duration = Duration::new(0, 50000000);
 
     //glfw_instance.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi)); <-- I am pretty sure we need this so it doesnt make a opengl context. But with no api provided it throws errors
-    //should also inclide window resizable hint
+    //should also include window resizable hint
 
     let (mut window, event_loop) = glfw_instance
     .create_window(win_width, win_height, win_title, glfw::WindowMode::Windowed).unwrap();
@@ -27,6 +32,8 @@ fn main() {
         }
 
         sleep(sleep_time);
+        frame_counter = frame_counter + 1;
+        println!("Tick {}", frame_counter);
     }
 }
 
