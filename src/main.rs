@@ -2,9 +2,7 @@ use glfw::{Window, Context};
 use std::thread::sleep;
 use std::time::Duration;
 
-//This project utilizes GLFW for windowing, https://www.glfw.org/ 
-//GLFW binaries will be built automatically by rustc https://crates.io/crates/glfw 
-//To build GLFW your machine must have Cmake installed and set in the PATH https://cmake.org/
+
 fn main() {
     let mut glfw_instance = glfw::init(handle_errors).unwrap();
 
@@ -32,6 +30,8 @@ fn main() {
         }
 
         sleep(sleep_time);
+
+        //DEBUG: debug counter
         frame_counter = frame_counter + 1;
         println!("Tick {}", frame_counter);
     }
