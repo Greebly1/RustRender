@@ -30,6 +30,8 @@ fn main() {
         }
 
         sleep(sleep_time);
+
+        //DEBUG: debug counter
         frame_counter = frame_counter + 1;
         println!("Tick {}", frame_counter);
     }
