@@ -6,3 +6,7 @@ edition = "2021"
 [dependencies]
 glfw = "0.56.0"
 log = "0.4.21"
+vulkano = "0.34.0"
+
+[profile.dev]
+opt-level = 1
