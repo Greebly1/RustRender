@@ -7,14 +7,13 @@ use vulkano::{
     instance::{
         Instance,
         InstanceCreateInfo
-    }
+    },
+    device::physical::PhysicalDevice
 };
-
 use std::{
-    sync::Arc, 
-    thread::sleep, 
-    time::Duration
+    io::{stdin, Read}, sync::Arc, thread::sleep, time::Duration
 };
+use core::iter::ExactSizeIterator;
 
 //Placing window data here to keep code clean
 //In the future we will need to set the win_width/height dynamically probably
@@ -23,6 +22,7 @@ static WIN_WIDTH : u32 = 500;
 static WIN_HEIGHT : u32 = 300;
 
 fn main() {
+    let mut terminal_input: String = String::new();
     let mut frame_counter: u64 = 0;
     let sleep_time : Duration = Duration::new(0, 50000000);
 
@@ -31,10 +31,22 @@ fn main() {
 
     //VULKANO for vulkan drawing api
     let vk_library : Arc<VulkanLibrary> = VulkanLibrary::new()
-        .expect("Failed to retrieve a valid vulkan library");
+        .expect("Failed to retrieve a valid vulkan library/DLL");
     let vk_instance = Instance::new(vk_library, InstanceCreateInfo::default())
         .expect("failed to create vulkan api instance");
+    let vk_graphics_processors = vk_instance.enumerate_physical_devices()
+        .expect("Failed to retrieve a vulkan compatible graphics processor device");
+    
+    assert!(vk_graphics_processors.len() > 0, "Your machine has no vulkan compatible graphics processors");
 
+    println!("Select a GPU to proceed");
+    let mut device_select_counter: u8 = 1;
+    for vk_device in vk_graphics_processors { //prints the name of each GPU
+        println!("{device_select_counter}. {}", vk_device.properties().device_name);
+        device_select_counter = device_select_counter + 1;
+    }
+    stdin().read_line(&mut terminal_input).unwrap();
+    let user_selection = terminal_input.parse::<usize>().expect("You did not input a valid GPU ID");
 
     //glfw_instance.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi)); <-- I am pretty sure we need this so it doesnt make a opengl context. But with no api provided it throws errors
     //should also include window resizable hint
