@@ -11,7 +11,7 @@ use vulkano::{
     device::physical::PhysicalDevice
 };
 use std::{
-    io::{stdin, Read}, sync::Arc, thread::sleep, time::Duration
+    io::stdin, sync::Arc, thread::sleep, time::Duration
 };
 use core::iter::ExactSizeIterator;
 
@@ -33,20 +33,28 @@ fn main() {
     let vk_library : Arc<VulkanLibrary> = VulkanLibrary::new()
         .expect("Failed to retrieve a valid vulkan library/DLL");
     let vk_instance = Instance::new(vk_library, InstanceCreateInfo::default())
-        .expect("failed to create vulkan api instance");
-    let vk_graphics_processors = vk_instance.enumerate_physical_devices()
-        .expect("Failed to retrieve a vulkan compatible graphics processor device");
+        .expect("failed to create a vulkan api instance");
+    let mut vk_graphics_processors : Vec<Arc<PhysicalDevice>> = vk_instance.enumerate_physical_devices()
+        .expect("Failed to retrieve a vulkan compatible graphics processors")
+        .collect(); //.enumerate_physical_devices returns an iterator, but I just want a collection. .collect() turns an iterator into a collection of what it was iterating over
     
     assert!(vk_graphics_processors.len() > 0, "Your machine has no vulkan compatible graphics processors");
 
+    
     println!("Select a GPU to proceed");
-    let mut device_select_counter: u8 = 1;
-    for vk_device in vk_graphics_processors { //prints the name of each GPU
+    let mut device_select_counter: u8 = 1;                  
+    for vk_device in vk_graphics_processors.iter() { //prints the name of each GPU
         println!("{device_select_counter}. {}", vk_device.properties().device_name);
         device_select_counter = device_select_counter + 1;
-    }
+    } 
+
     stdin().read_line(&mut terminal_input).unwrap();
-    let user_selection = terminal_input.parse::<usize>().expect("You did not input a valid GPU ID");
+    terminal_input = terminal_input.trim().to_string();
+    let user_selection = terminal_input.parse::<u8>().expect("You did not input a valid GPU ID");
+    assert!(user_selection > 0 && user_selection <= (vk_graphics_processors.len() as u8), "You did not input a valid GPU ID");
+    let graphics_processor : Arc<PhysicalDevice> = vk_graphics_processors.swap_remove((user_selection - 1) as usize);
+
+    println!("Proceeding with selected graphics processor: {}", graphics_processor.properties().device_name);
 
     //glfw_instance.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi)); <-- I am pretty sure we need this so it doesnt make a opengl context. But with no api provided it throws errors
     //should also include window resizable hint
