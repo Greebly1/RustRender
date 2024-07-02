@@ -2,7 +2,3 @@
 name = "Rust3D"
 version = "0.1.0"
 edition = "2021"
-
-[dependencies]
-glfw = "0.56.0"
-log = "0.4.21"
