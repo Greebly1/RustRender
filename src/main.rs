@@ -1,6 +1,67 @@
+use std::{
+    io::stdin,
+    sync::Arc
+};
+use vulkano::device::{
+    Device,
+    physical::PhysicalDevice,
+    QueueFlags,
+    QueueCreateInfo,
+    DeviceCreateInfo
+};
 
 
 fn main() {
+    let mut terminal_input: String = String::new(); 
+
+    let vulkan_lib = vulkano::library::VulkanLibrary::new()
+        .expect("Failed to make default vulkan library"); //default vulkan library
+    let vulkan_create_info = vulkano::instance::InstanceCreateInfo::default();
+    let vulkan = vulkano::instance::Instance::new(vulkan_lib, vulkan_create_info)
+        .unwrap();
+
+    let mut vk_graphics_processors : Vec<Arc<PhysicalDevice>> = vulkan.enumerate_physical_devices()
+        .unwrap()
+        .collect();
+    assert!(vk_graphics_processors.len() > 0, "This machine does not have a vulkan compatible GPU");
+
+    println!("Select a GPU to proceed");                
+    for (index, vk_device) in vk_graphics_processors.iter().enumerate() { //prints the name of each GPU
+        println!("{}. {}", index+1, vk_device.properties().device_name);
+    } 
+
+    stdin().read_line(&mut terminal_input).unwrap();
+    terminal_input = terminal_input.trim().to_string();
+    let user_selection = terminal_input.parse::<u8>().expect("You did not input a valid GPU ID");
+    assert!(user_selection > 0 && user_selection <= (vk_graphics_processors.len() as u8), "You did not input a valid GPU ID");
+    let graphics_processor : Arc<PhysicalDevice> = vk_graphics_processors.swap_remove((user_selection - 1) as usize);
+
+    println!("Proceeding with selected graphics processor: {}", graphics_processor.properties().device_name);
+
+    println!("Listing GPU queue families");
+    for queue_family in graphics_processor.queue_family_properties() {
+        println!("Found a queue family with {} queue channel(s)", queue_family.queue_count);
+    }
+
+    let queue_family_index : u32 = graphics_processor
+        .queue_family_properties()
+        .iter()
+        .enumerate()
+        .position(|(_queue_family_index , queue_family_properties)| {
+            queue_family_properties.queue_flags.contains(QueueFlags::GRAPHICS)
+        }).expect("This GPU has no open graphics queues") as u32;
+
+    let (render_device, mut render_queues) = Device::new(
+        graphics_processor, 
+        DeviceCreateInfo {
+            queue_create_infos: vec![QueueCreateInfo {
+                queue_family_index,
+                ..Default::default() //im ganna be honest I dont fully understand this section of code
+            }],
+            ..Default::default()
+        },
+    ).expect("failed to create message queue with render device");
+
     let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
     let mut app : Application = Application{
@@ -8,9 +69,11 @@ fn main() {
         window_create_info : winit::window::WindowAttributes::default()
     };
 
+    println!("Initialization complete, press ENTER to begin");
+    stdin().read_line(&mut terminal_input).unwrap();
+
     event_loop.run_app(&mut app).unwrap();
 }
-
 
 struct Application {
     //Mutable singleton that stores global data for our ApplicationHandler hooks to use
