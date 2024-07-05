@@ -2,21 +2,25 @@ use std::{
     io::stdin,
     sync::Arc
 };
-use vulkano::device::{
-    Device,
-    physical::PhysicalDevice,
-    QueueFlags,
-    QueueCreateInfo,
-    DeviceCreateInfo
-};
+use vulkano::{device::{
+    self, physical::PhysicalDevice, Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags
+}, instance::Instance, swapchain::Surface, Validated, VulkanError};
 
 
 fn main() {
     let mut terminal_input: String = String::new(); 
 
+    let event_loop = winit::event_loop::EventLoop::new().unwrap();
+
     let vulkan_lib = vulkano::library::VulkanLibrary::new()
         .expect("Failed to make default vulkan library"); //default vulkan library
-    let vulkan_create_info = vulkano::instance::InstanceCreateInfo::default();
+    let winit_extensions = vulkano::swapchain::Surface::required_extensions(&event_loop);
+    let vulkan_create_info: vulkano::instance::InstanceCreateInfo = vulkano::instance::InstanceCreateInfo{
+        application_name: Some(String::from("Rust_Render")),
+        engine_name: Some(String::from("DakotaEngine")),
+        enabled_extensions: winit_extensions,
+        ..Default::default()
+    };
     let vulkan = vulkano::instance::Instance::new(vulkan_lib, vulkan_create_info)
         .unwrap();
 
@@ -62,11 +66,15 @@ fn main() {
         },
     ).expect("failed to create message queue with render device");
 
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
 
     let mut app : Application = Application{
         window_main : None,
-        window_create_info : winit::window::WindowAttributes::default()
+        window_create_info : winit::window::WindowAttributes::default(),
+
+        VK_Surface : None, 
+        vulkan_instance : vulkan,
+        graphics_processor : render_device,
+        render_queues : render_queues.collect()
     };
 
     println!("Initialization complete, press ENTER to begin");
@@ -77,8 +85,14 @@ fn main() {
 
 struct Application {
     //Mutable singleton that stores global data for our ApplicationHandler hooks to use
-    window_main: Option<winit::window::Window>,
-    window_create_info : winit::window::WindowAttributes
+    window_main: Option<Arc<winit::window::Window>>,
+    window_create_info : winit::window::WindowAttributes,
+    
+    //when we make our winit application we will move all of the vulkan stuff into it because
+    VK_Surface : Option<Arc<vulkano::swapchain::Surface>>, //surface needs a window to be constructed
+    vulkan_instance : Arc<Instance>,
+    graphics_processor : Arc<Device>,
+    render_queues : Vec<Arc<vulkano::device::Queue>>
 }
 
 impl Application {
@@ -98,10 +112,13 @@ impl winit::application::ApplicationHandler for Application {
     //some of these hooks only emit on certain platforms, like android or Mac
 
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.window_main = Some(event_loop
+        self.window_main = Some(Arc::new(event_loop
             .create_window(self.window_create_info.clone())
-            .expect("Failed to make window from attributes")
+            .expect("Failed to make window from attributes"))
         );
+
+        let main_window_surface = Surface::from_window(self.vulkan_instance.clone(), self.window_main.clone().unwrap());
+        self.VK_Surface = Some(main_window_surface.unwrap());
     }
 
     fn window_event(
@@ -118,7 +135,7 @@ impl winit::application::ApplicationHandler for Application {
             RedrawRequested => { }
 
             #[cfg(not(any(ios_platform, android_platform, web_platform, wayland_platform)))]
-            Moved(position) => { println!("Moving windows won't be included on wayland"); }
+            Moved(position) => {  }
 
             CloseRequested => { 
                 if self.window_main.is_some() {
