@@ -138,10 +138,9 @@ impl winit::application::ApplicationHandler for Application {
             Moved(position) => {  }
 
             CloseRequested => { 
-                if self.window_main.is_some() {
-                    let main_win_id = self.main_window_id().unwrap();
-                    if main_win_id == window_id { event_loop.exit(); }
-                    }
+                if self.main_window_id().unwrap() == window_id {
+                    event_loop.exit();
+                }
                 }
             Destroyed => { }
             Focused(is_focused) => { }
