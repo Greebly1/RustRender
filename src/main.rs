@@ -1,10 +1,11 @@
 use std::{
-    io::stdin,
-    sync::Arc
+    default, fmt::Debug, io::stdin, sync::Arc
 };
-use vulkano::{device::{
-    self, physical::PhysicalDevice, Device, DeviceCreateInfo, QueueCreateInfo, QueueFlags
-}, instance::Instance, swapchain::Surface, Validated, VulkanError};
+use vulkano::{
+    device::{ 
+        self, physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags
+}, image::ImageUsage, instance::Instance, swapchain::{self, Surface, Swapchain}
+};
 
 
 fn main() {
@@ -17,7 +18,7 @@ fn main() {
     let winit_extensions = vulkano::swapchain::Surface::required_extensions(&event_loop);
     let vulkan_create_info: vulkano::instance::InstanceCreateInfo = vulkano::instance::InstanceCreateInfo{
         application_name: Some(String::from("Rust_Render")),
-        engine_name: Some(String::from("DakotaEngine")),
+        engine_name: Some(String::from("V8Engine")),
         enabled_extensions: winit_extensions,
         ..Default::default()
     };
@@ -55,6 +56,11 @@ fn main() {
             queue_family_properties.queue_flags.contains(QueueFlags::GRAPHICS)
         }).expect("This GPU has no open graphics queues") as u32;
 
+    let device_extensions = DeviceExtensions{
+        khr_swapchain: true,
+        ..Default::default()
+    };
+
     let (render_device, mut render_queues) = Device::new(
         graphics_processor, 
         DeviceCreateInfo {
@@ -62,6 +68,7 @@ fn main() {
                 queue_family_index,
                 ..Default::default() //im ganna be honest I dont fully understand this section of code
             }],
+            enabled_extensions: device_extensions,
             ..Default::default()
         },
     ).expect("failed to create message queue with render device");
@@ -71,7 +78,6 @@ fn main() {
         window_main : None,
         window_create_info : winit::window::WindowAttributes::default(),
 
-        VK_Surface : None, 
         vulkan_instance : vulkan,
         graphics_processor : render_device,
         render_queues : render_queues.collect()
@@ -83,13 +89,20 @@ fn main() {
     event_loop.run_app(&mut app).unwrap();
 }
 
+struct MyWindowData {
+    window: Arc<winit::window::Window>,
+    render_surface: Arc<vulkano::swapchain::Surface>,
+
+    swapchain: Arc<Swapchain>,
+    swapchain_images: Vec<Arc<vulkano::image::Image>>
+}
+
 struct Application {
     //Mutable singleton that stores global data for our ApplicationHandler hooks to use
-    window_main: Option<Arc<winit::window::Window>>,
+    window_main: Option<MyWindowData>,
     window_create_info : winit::window::WindowAttributes,
     
     //when we make our winit application we will move all of the vulkan stuff into it because
-    VK_Surface : Option<Arc<vulkano::swapchain::Surface>>, //surface needs a window to be constructed
     vulkan_instance : Arc<Instance>,
     graphics_processor : Arc<Device>,
     render_queues : Vec<Arc<vulkano::device::Queue>>
@@ -99,11 +112,15 @@ impl Application {
 
     fn main_window_id(&self) -> Option<winit::window::WindowId> {
         if self.window_main.is_some() {
-            return Some(self.window_main.as_ref().unwrap().id());
+            return Some(self.window_main.as_ref().unwrap().window.id());
         } else {
             return None;
         }
     }
+}
+
+impl MyWindowData {
+
 }
 
 impl winit::application::ApplicationHandler for Application {
@@ -112,13 +129,55 @@ impl winit::application::ApplicationHandler for Application {
     //some of these hooks only emit on certain platforms, like android or Mac
 
     fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        self.window_main = Some(Arc::new(event_loop
+        //make the window, the render surface, and the swapchain
+        let main_window: Arc<winit::window::Window> = Arc::new(event_loop
             .create_window(self.window_create_info.clone())
-            .expect("Failed to make window from attributes"))
-        );
+            .expect("Failed to make window from attributes"));
 
-        let main_window_surface = Surface::from_window(self.vulkan_instance.clone(), self.window_main.clone().unwrap());
-        self.VK_Surface = Some(main_window_surface.unwrap());
+        let main_surface: Arc<Surface> = 
+            Surface::from_window(self.vulkan_instance.clone(), main_window.clone())
+            .unwrap();
+        
+        use vulkano::swapchain::*;
+        //platform and hardware specific capabilities
+        let surface_capabiities = self.graphics_processor
+            .physical_device()
+            .surface_capabilities(&main_surface, Default::default())
+            .unwrap();
+        let image_resolution = surface_capabiities.current_extent.unwrap_or([640,480]);
+        let transform = surface_capabiities.current_transform;
+        let (format, color_space) = self.graphics_processor
+            .physical_device()
+            .surface_formats(&main_surface, Default::default())
+            .unwrap()[0]; //use first image format
+            //TODO: ideally pick an image format
+
+        let swapchain_create_info = SwapchainCreateInfo {
+            flags: SwapchainCreateFlags::empty(),
+            min_image_count: 2, //double buffer
+            image_format: format,
+            image_color_space: color_space,
+            image_extent: image_resolution,
+            pre_transform: transform,
+            image_usage: ImageUsage::COLOR_ATTACHMENT,
+            composite_alpha: CompositeAlpha::Opaque,
+            present_mode: PresentMode::Mailbox, //v-sync
+            ..Default::default()
+        };
+        let (main_swapchain, swapchain_imgs) = Swapchain::new(
+                self.graphics_processor.clone(), 
+                main_surface.clone(), 
+                swapchain_create_info)
+            .unwrap();
+
+        let main_window_data = MyWindowData {
+            window: main_window,
+            render_surface: main_surface,
+            swapchain: main_swapchain,
+            swapchain_images: swapchain_imgs
+        };
+
+        self.window_main = Some(main_window_data);
     }
 
     fn window_event(
@@ -190,3 +249,4 @@ impl winit::application::ApplicationHandler for Application {
         
     }
 }
+
