@@ -6,6 +6,7 @@ version = 3
 name = "Rust3D"
 version = "0.1.0"
 dependencies = [
+ "smallvec",
  "vulkano",
  "vulkano-win",
  "winit 0.30.3",

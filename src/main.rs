@@ -1,10 +1,15 @@
 use std::{
-    default, fmt::Debug, io::stdin, sync::Arc
+    io::stdin, sync::Arc
 };
 use vulkano::{
     device::{ 
-        self, physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags
-}, image::ImageUsage, instance::Instance, swapchain::{self, Surface, Swapchain}
+        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags
+}, image::ImageUsage, instance::Instance, swapchain::Swapchain,
+    command_buffer::allocator::{
+        StandardCommandBufferAlloc,
+        StandardCommandBufferAllocatorCreateInfo,
+        StandardCommandBufferAllocator
+    }
 };
 
 
@@ -42,6 +47,7 @@ fn main() {
     let graphics_processor : Arc<PhysicalDevice> = vk_graphics_processors.swap_remove((user_selection - 1) as usize);
 
     println!("Proceeding with selected graphics processor: {}", graphics_processor.properties().device_name);
+    println!("Device supporting Version {:?}", graphics_processor.api_version());
 
     println!("Listing GPU queue families");
     for queue_family in graphics_processor.queue_family_properties() {
@@ -66,12 +72,15 @@ fn main() {
         DeviceCreateInfo {
             queue_create_infos: vec![QueueCreateInfo {
                 queue_family_index,
-                ..Default::default() //im ganna be honest I dont fully understand this section of code
+                ..Default::default() 
             }],
             enabled_extensions: device_extensions,
             ..Default::default()
         },
     ).expect("failed to create message queue with render device");
+
+    let command_allocator_create_info : StandardCommandBufferAllocatorCreateInfo = StandardCommandBufferAllocatorCreateInfo::default();
+    let vulkan_command_allocator : StandardCommandBufferAllocator = StandardCommandBufferAllocator::new(render_device.clone(), command_allocator_create_info);
 
 
     let mut app : Application = Application{
@@ -80,7 +89,8 @@ fn main() {
 
         vulkan_instance : vulkan,
         graphics_processor : render_device,
-        render_queues : render_queues.collect()
+        render_queues : render_queues.collect(),
+        command_allocator : vulkan_command_allocator
     };
 
     println!("Initialization complete, press ENTER to begin");
@@ -105,7 +115,8 @@ struct Application {
     //when we make our winit application we will move all of the vulkan stuff into it because
     vulkan_instance : Arc<Instance>,
     graphics_processor : Arc<Device>,
-    render_queues : Vec<Arc<vulkano::device::Queue>>
+    render_queues : Vec<Arc<vulkano::device::Queue>>,
+    command_allocator : StandardCommandBufferAllocator
 }
 
 impl Application {
