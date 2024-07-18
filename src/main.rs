@@ -212,7 +212,8 @@ impl winit::application::ApplicationHandler for Application {
         self.window_main = Some(main_window_data);
 
         let source_content_hardCoded : Vec<i32> = (0..64).collect();
-        self.buffer_src = Some(Buffer::from_iter(
+        self.buffer_src = Some( 
+            Buffer::from_iter(
             self.memory_allocator.clone(), 
             BufferCreateInfo {
                 usage: BufferUsage::TRANSFER_SRC,
@@ -225,7 +226,7 @@ impl winit::application::ApplicationHandler for Application {
             source_content_hardCoded).unwrap());
 
         let destination_content_hardCoded : Vec<i32> = (0..64).map(|_| 0).collect();
-        self.buffer_dest = Some(
+        self.buffer_dest = Some( 
             Buffer::from_iter(
                 self.memory_allocator.clone(), 
                 BufferCreateInfo {
@@ -238,7 +239,20 @@ impl winit::application::ApplicationHandler for Application {
             }, 
                 destination_content_hardCoded
             ).unwrap()
-        )
+        );
+
+        let mut builder = vulkano::command_buffer::AutoCommandBufferBuilder::primary(
+            &self.command_allocator, 
+            self.render_queues.first().unwrap().queue_family_index(), 
+            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit).unwrap();
+
+            use vulkano::command_buffer::*;
+        
+        builder.copy_buffer(
+            CopyBufferInfo::buffers(self.buffer_src.as_mut().unwrap().clone(), self.buffer_dest.as_mut().unwrap().clone()))
+            .unwrap();
+
+        let command_buffer = builder.build().unwrap();
     }
 
     fn window_event(
