@@ -4,12 +4,15 @@ use std::{
 use vulkano::{
     device::{ 
         physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags
-}, image::ImageUsage, instance::Instance, swapchain::Swapchain,
+}, 
+    image::ImageUsage, 
+    instance::Instance, 
+    swapchain::Swapchain,
     command_buffer::allocator::{
-        StandardCommandBufferAlloc,
         StandardCommandBufferAllocatorCreateInfo,
         StandardCommandBufferAllocator
-    }
+    },
+    memory::allocator::StandardMemoryAllocator
 };
 
 
@@ -88,6 +91,7 @@ fn main() {
         window_create_info : winit::window::WindowAttributes::default(),
 
         vulkan_instance : vulkan,
+        memory_allocator : StandardMemoryAllocator::new_default(render_device.clone()),
         graphics_processor : render_device,
         render_queues : render_queues.collect(),
         command_allocator : vulkan_command_allocator
@@ -116,7 +120,8 @@ struct Application {
     vulkan_instance : Arc<Instance>,
     graphics_processor : Arc<Device>,
     render_queues : Vec<Arc<vulkano::device::Queue>>,
-    command_allocator : StandardCommandBufferAllocator
+    command_allocator : StandardCommandBufferAllocator,
+    memory_allocator : StandardMemoryAllocator
 }
 
 impl Application {
