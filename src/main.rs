@@ -12,7 +12,17 @@ use vulkano::{
         StandardCommandBufferAllocatorCreateInfo,
         StandardCommandBufferAllocator
     },
-    memory::allocator::StandardMemoryAllocator
+    memory::allocator::{
+        StandardMemoryAllocator,
+        AllocationCreateInfo,
+        MemoryTypeFilter
+    },
+    buffer::{
+        Buffer,
+        Subbuffer,
+        BufferUsage,
+        BufferCreateInfo
+    }
 };
 
 
@@ -91,10 +101,13 @@ fn main() {
         window_create_info : winit::window::WindowAttributes::default(),
 
         vulkan_instance : vulkan,
-        memory_allocator : StandardMemoryAllocator::new_default(render_device.clone()),
+        memory_allocator : Arc::from(StandardMemoryAllocator::new_default(render_device.clone())),
         graphics_processor : render_device,
         render_queues : render_queues.collect(),
-        command_allocator : vulkan_command_allocator
+        command_allocator : vulkan_command_allocator,
+
+        buffer_src : None,
+        buffer_dest : None
     };
 
     println!("Initialization complete, press ENTER to begin");
@@ -121,7 +134,10 @@ struct Application {
     graphics_processor : Arc<Device>,
     render_queues : Vec<Arc<vulkano::device::Queue>>,
     command_allocator : StandardCommandBufferAllocator,
-    memory_allocator : StandardMemoryAllocator
+    memory_allocator : Arc<dyn vulkano::memory::allocator::MemoryAllocator>,
+
+    buffer_src : Option<Subbuffer<[i32]>>,
+    buffer_dest : Option<Subbuffer<[i32]>>
 }
 
 impl Application {
@@ -194,6 +210,35 @@ impl winit::application::ApplicationHandler for Application {
         };
 
         self.window_main = Some(main_window_data);
+
+        let source_content_hardCoded : Vec<i32> = (0..64).collect();
+        self.buffer_src = Some(Buffer::from_iter(
+            self.memory_allocator.clone(), 
+            BufferCreateInfo {
+                usage: BufferUsage::TRANSFER_SRC,
+                ..Default::default()
+            }, 
+            AllocationCreateInfo {
+                memory_type_filter : MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+                ..Default::default()
+            }, 
+            source_content_hardCoded).unwrap());
+
+        let destination_content_hardCoded : Vec<i32> = (0..64).map(|_| 0).collect();
+        self.buffer_dest = Some(
+            Buffer::from_iter(
+                self.memory_allocator.clone(), 
+                BufferCreateInfo {
+                    usage : BufferUsage::TRANSFER_DST,
+                    ..Default::default()
+                }, 
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_RANDOM_ACCESS,
+                ..Default::default()
+            }, 
+                destination_content_hardCoded
+            ).unwrap()
+        )
     }
 
     fn window_event(
