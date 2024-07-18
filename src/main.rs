@@ -253,6 +253,22 @@ impl winit::application::ApplicationHandler for Application {
             .unwrap();
 
         let command_buffer = builder.build().unwrap();
+
+        use vulkano::sync::{self, GpuFuture};
+        let future = sync::now(self.graphics_processor.clone())
+            .then_execute(self.render_queues.first().unwrap().clone(), command_buffer)
+            .unwrap()
+            .then_signal_fence_and_flush()
+            .unwrap();
+
+        future.wait(None).unwrap();
+
+        let src_content = self.buffer_src.as_mut().unwrap().read().unwrap();
+        let dest_content = self.buffer_dest.as_mut().unwrap().read().unwrap();
+        assert_eq!(&*src_content, &*dest_content);
+            //THIS WHOLE THING IS JUST TO TEST TO SEE IF THE GPU EFFECTIVELY COPIED A BUFFER
+        println!("It worked!");
+
     }
 
     fn window_event(
