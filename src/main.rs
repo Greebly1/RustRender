@@ -1,274 +1,149 @@
-use std::{
-    io::stdin, sync::Arc
-};
 use vulkano::{
-    device::{ 
-        physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, QueueCreateInfo, QueueFlags
-}, 
-    image::ImageUsage, 
-    instance::Instance, 
-    swapchain::Swapchain,
-    command_buffer::allocator::{
-        StandardCommandBufferAllocatorCreateInfo,
-        StandardCommandBufferAllocator
-    },
-    memory::allocator::{
-        StandardMemoryAllocator,
-        AllocationCreateInfo,
-        MemoryTypeFilter
-    },
-    buffer::{
-        Buffer,
-        Subbuffer,
-        BufferUsage,
-        BufferCreateInfo
-    }
+    buffer::{Buffer, BufferContents, BufferCreateFlags, BufferCreateInfo, BufferReadGuard, BufferUsage, Subbuffer}, device::{physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFamilyProperties, QueueFlags}, format::{self, Format}, image::{Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::graphics::vertex_input::Vertex, swapchain::{ColorSpace, CompositeAlpha, PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateFlags, SwapchainCreateInfo}
 };
-
+use winit::{application::ApplicationHandler, event_loop::{ActiveEventLoop, EventLoop}, window::{self, Window, WindowAttributes}};
+use std::sync::Arc;
 
 fn main() {
-    let mut terminal_input: String = String::new(); 
+    //1 Connect to GPU
+    
 
-    let event_loop = winit::event_loop::EventLoop::new().unwrap();
-
-    let vulkan_lib = vulkano::library::VulkanLibrary::new()
-        .expect("Failed to make default vulkan library"); //default vulkan library
-    let winit_extensions = vulkano::swapchain::Surface::required_extensions(&event_loop);
-    let vulkan_create_info: vulkano::instance::InstanceCreateInfo = vulkano::instance::InstanceCreateInfo{
-        application_name: Some(String::from("Rust_Render")),
-        engine_name: Some(String::from("V8Engine")),
-        enabled_extensions: winit_extensions,
-        ..Default::default()
-    };
-    let vulkan = vulkano::instance::Instance::new(vulkan_lib, vulkan_create_info)
-        .unwrap();
-
-    let mut vk_graphics_processors : Vec<Arc<PhysicalDevice>> = vulkan.enumerate_physical_devices()
-        .unwrap()
-        .collect();
-    assert!(vk_graphics_processors.len() > 0, "This machine does not have a vulkan compatible GPU");
-
-    println!("Select a GPU to proceed");                
-    for (index, vk_device) in vk_graphics_processors.iter().enumerate() { //prints the name of each GPU
-        println!("{}. {}", index+1, vk_device.properties().device_name);
-    } 
-
-    stdin().read_line(&mut terminal_input).unwrap();
-    terminal_input = terminal_input.trim().to_string();
-    let user_selection = terminal_input.parse::<u8>().expect("You did not input a valid GPU ID");
-    assert!(user_selection > 0 && user_selection <= (vk_graphics_processors.len() as u8), "You did not input a valid GPU ID");
-    let graphics_processor : Arc<PhysicalDevice> = vk_graphics_processors.swap_remove((user_selection - 1) as usize);
-
-    println!("Proceeding with selected graphics processor: {}", graphics_processor.properties().device_name);
-    println!("Device supporting Version {:?}", graphics_processor.api_version());
-
-    println!("Listing GPU queue families");
-    for queue_family in graphics_processor.queue_family_properties() {
-        println!("Found a queue family with {} queue channel(s)", queue_family.queue_count);
-    }
-
-    let queue_family_index : u32 = graphics_processor
-        .queue_family_properties()
-        .iter()
-        .enumerate()
-        .position(|(_queue_family_index , queue_family_properties)| {
-            queue_family_properties.queue_flags.contains(QueueFlags::GRAPHICS)
-        }).expect("This GPU has no open graphics queues") as u32;
-
-    let device_extensions = DeviceExtensions{
-        khr_swapchain: true,
-        ..Default::default()
-    };
-
-    let (render_device, mut render_queues) = Device::new(
-        graphics_processor, 
-        DeviceCreateInfo {
-            queue_create_infos: vec![QueueCreateInfo {
-                queue_family_index,
-                ..Default::default() 
-            }],
-            enabled_extensions: device_extensions,
-            ..Default::default()
-        },
-    ).expect("failed to create message queue with render device");
-
-    let command_allocator_create_info : StandardCommandBufferAllocatorCreateInfo = StandardCommandBufferAllocatorCreateInfo::default();
-    let vulkan_command_allocator : StandardCommandBufferAllocator = StandardCommandBufferAllocator::new(render_device.clone(), command_allocator_create_info);
+    let event_loop: EventLoop<_> = EventLoop::new().unwrap();
 
 
-    let mut app : Application = Application{
-        window_main : None,
-        window_create_info : winit::window::WindowAttributes::default(),
 
-        vulkan_instance : vulkan,
-        memory_allocator : Arc::from(StandardMemoryAllocator::new_default(render_device.clone())),
-        graphics_processor : render_device,
-        render_queues : render_queues.collect(),
-        command_allocator : vulkan_command_allocator,
+    //2 create window
 
-        buffer_src : None,
-        buffer_dest : None
-    };
 
-    println!("Initialization complete, press ENTER to begin");
-    stdin().read_line(&mut terminal_input).unwrap();
+    //3 create render pass
+        //render pass
+        //frame buffers
 
-    event_loop.run_app(&mut app).unwrap();
+    //4 create vertex buffer
+
+
+    //5 create pipeline
+        //compile shaders
+        //subpasses
+
+    //6 create command buffers
 }
 
-struct MyWindowData {
-    window: Arc<winit::window::Window>,
-    render_surface: Arc<vulkano::swapchain::Surface>,
-
-    swapchain: Arc<Swapchain>,
-    swapchain_images: Vec<Arc<vulkano::image::Image>>
+#[derive(BufferContents, Vertex)]
+#[repr(C)]
+struct Vert {
+    #[format(R32G32_SFLOAT)]
+    position: [f32; 2]
 }
 
 struct Application {
-    //Mutable singleton that stores global data for our ApplicationHandler hooks to use
-    window_main: Option<MyWindowData>,
-    window_create_info : winit::window::WindowAttributes,
-    
-    //when we make our winit application we will move all of the vulkan stuff into it because
-    vulkan_instance : Arc<Instance>,
-    graphics_processor : Arc<Device>,
-    render_queues : Vec<Arc<vulkano::device::Queue>>,
-    command_allocator : StandardCommandBufferAllocator,
-    memory_allocator : Arc<dyn vulkano::memory::allocator::MemoryAllocator>,
+    vk_driver : Arc<Instance>,
+    vk_GPU : Option<(Arc<PhysicalDevice>, Vec<u32>)>,
+    vk_virtual_GPU : Option<(Arc<Device>, Vec<Arc<Queue>>)>,
 
-    buffer_src : Option<Subbuffer<[i32]>>,
-    buffer_dest : Option<Subbuffer<[i32]>>
+    window_create_info : WindowAttributes,
+    window_main : Option<(Arc<Window>, Arc<Surface>)>,
+    swapchain : Option<(Arc<Swapchain>, Vec<Arc<Image>>)>,
+
+    memory_allocator : Option<Arc<dyn MemoryAllocator>>,
+    vert_buffer : Option<Subbuffer<[Vert]>>
 }
 
 impl Application {
+    fn CreateWindow(&mut self, event_loop : &ActiveEventLoop) {
+        let new_window = Arc::new(event_loop.create_window(self.window_create_info.clone())
+        .unwrap());
 
-    fn main_window_id(&self) -> Option<winit::window::WindowId> {
-        if self.window_main.is_some() {
-            return Some(self.window_main.as_ref().unwrap().window.id());
-        } else {
-            return None;
-        }
+        //https://docs.rs/vulkano/latest/vulkano/swapchain/struct.Surface.html
+        //Says that making a surface is platform specific, so we might need to do conditional compilation for certain platforms
+        let window_surface = Surface::from_window(self.vk_driver.clone(), new_window.clone())
+                .unwrap();
+
+        self.window_main = Some((new_window, window_surface))
+    }
+
+    fn InitGPU(&mut self) {
+        let device_extensions = DeviceExtensions{
+            khr_swapchain: true,
+            ..Default::default()
+        };
+        let surface = self.window_main.as_ref().unwrap().1.clone();
+
+        let device = LocateDevice(self.vk_driver.clone(), &device_extensions, surface).unwrap();
+    }
+
+    fn InitVirtualGPU(&mut self) {
+        let (gpu, queue_indices) = self.vk_GPU.as_ref().unwrap().clone();
+        let virtual_gpu_params : DeviceCreateInfo;
+        
+        let vk_extensions = DeviceExtensions {
+            khr_swapchain: true,
+            ..Default::default()
+        };
+
+        let device_features = Features {
+            ..Default::default()
+        };
+
+        let queue_params = QueueCreateInfo {
+            queue_family_index: queue_indices[0],
+            ..Default::default()
+        };
+
+        virtual_gpu_params = DeviceCreateInfo {
+            enabled_extensions: vk_extensions,
+            enabled_features: device_features,
+            queue_create_infos: vec![queue_params],
+            ..Default::default()
+        };
+
+        let (device, queues_iter) = Device::new(gpu, virtual_gpu_params).unwrap();
+
+        let queues: Vec<Arc<Queue>> = queues_iter.collect();
+
+        self.vk_virtual_GPU = Some((device, queues))
+    }
+
+    fn BuildSwapchain(&mut self) {
+        let (gpu, queues) = self.vk_virtual_GPU.as_ref().unwrap();
+        let (window, surface) = self.window_main.as_ref().unwrap();
+        ;
+        let capabilities = self.vk_virtual_GPU.as_ref().unwrap().0
+            .physical_device()
+            .surface_capabilities(surface, Default::default())
+            .unwrap();
+
+        let swapchain_parameters = SwapchainCreateInfo {
+            min_image_count: capabilities.min_image_count + 1,
+            image_format: Format::R8G8B8A8_SRGB,
+            image_color_space: ColorSpace::SrgbNonLinear,
+            image_extent: capabilities.current_extent.unwrap_or([640, 480]),
+            image_usage: ImageUsage::COLOR_ATTACHMENT,
+            composite_alpha: CompositeAlpha::Opaque,
+            present_mode : PresentMode::Mailbox,
+            ..Default::default()
+        };
+
+        let (swapchain, swapchain_images) = Swapchain::new(gpu.clone(), surface.clone(), swapchain_parameters).unwrap();
+        self.swapchain = Some((swapchain, swapchain_images));
     }
 }
 
-impl MyWindowData {
+impl ApplicationHandler for Application {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window_main.is_none() {
+            self.CreateWindow(event_loop);
 
-}
+            if self.vk_GPU.is_none() { self.InitGPU(); }
+            if self.vk_virtual_GPU.is_none() { self.InitVirtualGPU(); }
+            
+            self.BuildSwapchain();
 
-impl winit::application::ApplicationHandler for Application {
-    //This trait provides hooks into winit, so we can define custom behavior, think MonoBehavior in Unity
-    //https://docs.rs/winit/latest/winit/application/trait.ApplicationHandler.html 
-    //some of these hooks only emit on certain platforms, like android or Mac
+            self.memory_allocator = Some(Arc::from(StandardMemoryAllocator::new_default(self.vk_virtual_GPU.as_ref().unwrap().0.clone())));
 
-    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        //make the window, the render surface, and the swapchain
-        let main_window: Arc<winit::window::Window> = Arc::new(event_loop
-            .create_window(self.window_create_info.clone())
-            .expect("Failed to make window from attributes"));
-
-        let main_surface: Arc<Surface> = 
-            Surface::from_window(self.vulkan_instance.clone(), main_window.clone())
-            .unwrap();
-        
-        use vulkano::swapchain::*;
-        //platform and hardware specific capabilities
-        let surface_capabiities = self.graphics_processor
-            .physical_device()
-            .surface_capabilities(&main_surface, Default::default())
-            .unwrap();
-        let image_resolution = surface_capabiities.current_extent.unwrap_or([640,480]);
-        let transform = surface_capabiities.current_transform;
-        let (format, color_space) = self.graphics_processor
-            .physical_device()
-            .surface_formats(&main_surface, Default::default())
-            .unwrap()[0]; //use first image format
-            //TODO: ideally pick an image format
-
-        let swapchain_create_info = SwapchainCreateInfo {
-            flags: SwapchainCreateFlags::empty(),
-            min_image_count: 2, //double buffer
-            image_format: format,
-            image_color_space: color_space,
-            image_extent: image_resolution,
-            pre_transform: transform,
-            image_usage: ImageUsage::COLOR_ATTACHMENT,
-            composite_alpha: CompositeAlpha::Opaque,
-            present_mode: PresentMode::Mailbox, //v-sync
-            ..Default::default()
-        };
-        let (main_swapchain, swapchain_imgs) = Swapchain::new(
-                self.graphics_processor.clone(), 
-                main_surface.clone(), 
-                swapchain_create_info)
-            .unwrap();
-
-        let main_window_data = MyWindowData {
-            window: main_window,
-            render_surface: main_surface,
-            swapchain: main_swapchain,
-            swapchain_images: swapchain_imgs
-        };
-
-        self.window_main = Some(main_window_data);
-
-        let source_content_hardCoded : Vec<i32> = (0..64).collect();
-        self.buffer_src = Some( 
-            Buffer::from_iter(
-            self.memory_allocator.clone(), 
-            BufferCreateInfo {
-                usage: BufferUsage::TRANSFER_SRC,
-                ..Default::default()
-            }, 
-            AllocationCreateInfo {
-                memory_type_filter : MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
-                ..Default::default()
-            }, 
-            source_content_hardCoded).unwrap());
-
-        let destination_content_hardCoded : Vec<i32> = (0..64).map(|_| 0).collect();
-        self.buffer_dest = Some( 
-            Buffer::from_iter(
-                self.memory_allocator.clone(), 
-                BufferCreateInfo {
-                    usage : BufferUsage::TRANSFER_DST,
-                    ..Default::default()
-                }, 
-            AllocationCreateInfo {
-                memory_type_filter: MemoryTypeFilter::PREFER_HOST | MemoryTypeFilter::HOST_RANDOM_ACCESS,
-                ..Default::default()
-            }, 
-                destination_content_hardCoded
-            ).unwrap()
-        );
-
-        let mut builder = vulkano::command_buffer::AutoCommandBufferBuilder::primary(
-            &self.command_allocator, 
-            self.render_queues.first().unwrap().queue_family_index(), 
-            vulkano::command_buffer::CommandBufferUsage::OneTimeSubmit).unwrap();
-
-            use vulkano::command_buffer::*;
-        
-        builder.copy_buffer(
-            CopyBufferInfo::buffers(self.buffer_src.as_mut().unwrap().clone(), self.buffer_dest.as_mut().unwrap().clone()))
-            .unwrap();
-
-        let command_buffer = builder.build().unwrap();
-
-        use vulkano::sync::{self, GpuFuture};
-        let future = sync::now(self.graphics_processor.clone())
-            .then_execute(self.render_queues.first().unwrap().clone(), command_buffer)
-            .unwrap()
-            .then_signal_fence_and_flush()
-            .unwrap();
-
-        future.wait(None).unwrap();
-
-        let src_content = self.buffer_src.as_mut().unwrap().read().unwrap();
-        let dest_content = self.buffer_dest.as_mut().unwrap().read().unwrap();
-        assert_eq!(&*src_content, &*dest_content);
-            //THIS WHOLE THING IS JUST TO TEST TO SEE IF THE GPU EFFECTIVELY COPIED A BUFFER
-        println!("It worked!");
-
+            self.vert_buffer = Some(DefaultVertexBuffer(self.memory_allocator.as_ref().unwrap().clone()));
+        }
+        //this is the start of the app
     }
 
     fn window_event(
@@ -277,67 +152,90 @@ impl winit::application::ApplicationHandler for Application {
             window_id: winit::window::WindowId,
             event: winit::event::WindowEvent,
         ) {
-        use winit::event::WindowEvent::*;
-
-        match event {
-            Resized(size) => { }
-            ScaleFactorChanged { scale_factor, inner_size_writer } => { }
-            RedrawRequested => { }
-
-            #[cfg(not(any(ios_platform, android_platform, web_platform, wayland_platform)))]
-            Moved(position) => {  }
-
-            CloseRequested => { 
-                if self.main_window_id().unwrap() == window_id {
-                    event_loop.exit();
-                }
-                }
-            Destroyed => { }
-            Focused(is_focused) => { }
-            KeyboardInput { device_id, event, is_synthetic } => { }
-            ModifiersChanged(key_modifier) => { }
-            CursorMoved { device_id, position } => { }
-            CursorEntered { device_id } => { }
-            CursorLeft { device_id } => { }
-            MouseWheel { device_id, delta, phase } => { }
-            MouseInput { device_id, state, button } => { }
-            _ => { } //unsupported event
-        }
-    }
-
-    fn new_events(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, cause: winit::event::StartCause) {
-        
-    }
-
-    //eventloop_proxy is used for custom events we can send programmatically from other threads
-    fn user_event(&mut self, event_loop: &winit::event_loop::ActiveEventLoop, event: ()) {
-        //this is kind of how other threads can interface with our application   
-    }
-    
-    fn device_event(
-            &mut self,
-            event_loop: &winit::event_loop::ActiveEventLoop,
-            device_id: winit::event::DeviceId,
-            event: winit::event::DeviceEvent,
-        ) {
-        
-    }
-
-    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        
-    }
-
-    fn exiting(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-    }
-
-    #[cfg(any(android_platform, ios_platform, web_platform))]
-    fn suspended(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
-        
-    }
-
-    #[cfg(any(android_platform, ios_platform))]
-    fn memory_warning(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
         
     }
 }
 
+
+
+
+//Sets up connection to GPU
+fn InitializeVulkano(event_loop : &EventLoop<()>) -> Arc<Instance> {
+    let vk_library = VulkanLibrary::new().expect("failed to make vulkan library"); 
+    
+    //get gpu driver (instance)
+    let vk_instance_parameters: InstanceCreateInfo = InstanceCreateInfo {
+        enabled_extensions: Surface::required_extensions(&event_loop), //swapchain extensions
+        ..Default::default()
+    };
+    let vk_driver: Arc<Instance> = Instance::new(
+        vk_library.clone(),
+        vk_instance_parameters)
+        .expect("Failed to create vulkan instance");
+
+    //we can't locate a device until we've made our window, so this is all we can do for now
+    return vk_driver;
+}
+
+//find an optimal GPU to use and a graphics queue index to use
+fn LocateDevice(vk_driver : Arc<Instance>, extensions : &DeviceExtensions, window_surface : Arc<Surface>) 
+-> Option<(Arc<PhysicalDevice>, Vec<u32>)> {
+    use vulkano::device::physical::PhysicalDeviceType::*;
+    
+    //get all devices
+    //select one to be the logical device
+    let mut graphics_processors : Vec<Arc<PhysicalDevice>> = vk_driver.enumerate_physical_devices()
+        .unwrap()
+        .collect();
+
+    let selected_gpu: Option<(Arc<PhysicalDevice>, Vec<u32>)> = graphics_processors
+        .into_iter()
+        .filter(|gpu | {
+            gpu.supported_extensions().contains(&extensions)
+        })
+        .map(|gpu| {
+            let queue_indices : Vec<u32> = gpu.queue_family_properties().iter().enumerate()
+                .filter(|(index, family)| {
+                    family.queue_flags.contains(QueueFlags::GRAPHICS) 
+                        && gpu.surface_support(*index as u32, &window_surface).unwrap_or(false)
+                })
+                .map(|(index, family)| {
+                index as u32
+            }).collect();
+
+            (gpu, queue_indices)
+        })
+        .filter(|(gpu, queue_indices)| {
+            queue_indices.len() > 0
+        })
+        .min_by_key(|(gpu, queue_indices)| {
+            match gpu.properties().device_type{
+                DiscreteGpu => 0,
+                IntegratedGpu => 1,
+                VirtualGpu => 2,
+                Cpu => 3,
+                _ => 4
+            }
+        });
+
+    return selected_gpu;
+}
+
+fn DefaultVertexBuffer(mem_allocator : Arc<dyn MemoryAllocator>) -> Subbuffer<[Vert]>{
+    let vert1 = Vert { position: [-1.0, -1.0] };
+    let vert2 = Vert { position: [1.0, -1.0] };
+    let vert3 = Vert { position: [-1.0, 1.0] };
+
+    return Buffer::from_iter(
+        mem_allocator, 
+        BufferCreateInfo {
+            usage: BufferUsage::VERTEX_BUFFER,
+            ..Default::default()
+        }, 
+        AllocationCreateInfo{
+            memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
+            ..Default::default()
+        }, 
+        vec![vert1, vert2, vert3])
+        .unwrap();
+}
