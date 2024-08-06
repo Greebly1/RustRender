@@ -1,8 +1,46 @@
 use vulkano::{
-    buffer::{Buffer, BufferContents, BufferCreateFlags, BufferCreateInfo, BufferReadGuard, BufferUsage, Subbuffer}, device::{physical::PhysicalDevice, Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFamilyProperties, QueueFlags}, format::{self, Format}, image::{Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::graphics::vertex_input::Vertex, swapchain::{ColorSpace, CompositeAlpha, PresentMode, Surface, SurfaceInfo, Swapchain, SwapchainCreateFlags, SwapchainCreateInfo}
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{CommandBufferAllocator, StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, device::{
+        physical::PhysicalDevice, 
+        Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::Format, image::{
+        view::ImageView, 
+        Image, ImageCreateInfo, ImageType, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::{self, ShaderModule}, swapchain::{ColorSpace, CompositeAlpha, PresentMode, Surface, Swapchain, SwapchainCreateInfo}, NonExhaustive 
 };
-use winit::{application::ApplicationHandler, event_loop::{ActiveEventLoop, EventLoop}, window::{self, Window, WindowAttributes}};
+use winit::{
+    application::ApplicationHandler, 
+    event::WindowEvent, 
+    event_loop::{ActiveEventLoop, EventLoop}, 
+    window::{Window, WindowAttributes}};
 use std::sync::Arc;
+
+mod vs {
+    vulkano_shaders::shader!{
+        ty: "vertex",
+        src: r"
+            #version 460
+
+            layout(location = 0) in vec2 position;
+
+            void main() {
+                gl_Position = vec4(position, 0.0, 1.0);
+            }
+        ",
+    }
+}
+
+mod fs {
+    vulkano_shaders::shader!{
+        ty: "fragment",
+        src: "
+            #version 460
+
+            layout(location = 0) out vec4 f_color;
+
+            void main() {
+                f_color = vec4(1.0, 0.0, 0.0, 1.0);
+            }
+        ",
+    }
+}
 
 fn main() {
     //1 Connect to GPU
@@ -27,6 +65,9 @@ fn main() {
         //subpasses
 
     //6 create command buffers
+
+    //7 swapchain, make the render pass with the swapchain image
+    //flush commands buffer, synchronize, present the swapchain
 }
 
 #[derive(BufferContents, Vertex)]
@@ -46,7 +87,16 @@ struct Application {
     swapchain : Option<(Arc<Swapchain>, Vec<Arc<Image>>)>,
 
     memory_allocator : Option<Arc<dyn MemoryAllocator>>,
-    vert_buffer : Option<Subbuffer<[Vert]>>
+    command_allocator : Option<StandardCommandBufferAllocator>,
+    vert_buffer : Option<Subbuffer<[Vert]>>,
+    render_pass : Option<Arc<RenderPass>>,
+    render_buffer : Option<Arc<Framebuffer>>,
+    render_img : Option<(Arc<Image>, Arc<ImageView>)>,
+
+    vert_shader : Arc<ShaderModule>,
+    frag_shader : Arc<ShaderModule>,
+
+    render_pipeline : Option<Arc<GraphicsPipeline>>
 }
 
 impl Application {
@@ -127,6 +177,116 @@ impl Application {
         let (swapchain, swapchain_images) = Swapchain::new(gpu.clone(), surface.clone(), swapchain_parameters).unwrap();
         self.swapchain = Some((swapchain, swapchain_images));
     }
+
+    fn BuildRenderPass(&mut self) {
+        let window_size = self.window_main.as_ref().unwrap().0.inner_size();
+
+        let render_image: Arc<Image> = Image::new(
+            self.memory_allocator.as_ref().unwrap().clone(),
+            ImageCreateInfo {
+                image_type: ImageType::Dim2d, //2 dimensional
+                format: Format::R8G8B8A8_UNORM,
+                extent: [window_size.width, window_size.height, 1],
+                usage: ImageUsage::COLOR_ATTACHMENT | ImageUsage::TRANSFER_SRC,
+                ..Default::default()
+            },
+            AllocationCreateInfo {
+                memory_type_filter: MemoryTypeFilter::PREFER_DEVICE,
+                ..Default::default()
+            }
+        ).unwrap();
+
+        self.render_img = Some((render_image.clone(), ImageView::new_default(render_image.clone()).unwrap()));
+
+        let render_pass : Arc<RenderPass> = vulkano::single_pass_renderpass!(
+            self.vk_virtual_GPU.as_ref().unwrap().0.clone(),
+            attachments: {
+                color: {
+                    format: self.RenderFormatOr(Format::R8G8B8A8_UNORM),
+                    samples: 1,
+                    load_op: Clear,
+                    store_op: Store
+                },
+            },
+            pass: {
+                color: [color],
+                depth_stencil: {},
+            },
+        ).unwrap();
+
+        self.render_pass = Some(render_pass);
+
+        let frame_buf = Framebuffer::new(
+            self.render_pass.as_ref().unwrap().clone(), 
+            FramebufferCreateInfo {
+                attachments: vec![self.render_img.as_ref().unwrap().1.clone()],
+                ..Default::default()
+            }
+        ).unwrap();
+        
+    }
+
+    fn BuildPipeline(&mut self) {
+        let window_size = self.window_main.as_ref().unwrap().0.inner_size();
+
+        let viewport = Viewport {
+            offset: [0.0, 0.0],
+            extent: [f32::from_bits(window_size.width), f32::from_bits(window_size.height)],
+            depth_range: 0.0..=1.0, //<-- since the format is UNORM I think
+        };
+        
+        let vs = self.vert_shader.clone().entry_point("main").unwrap();
+        let fs = self.frag_shader.clone().entry_point("main").unwrap();
+
+        let vert_input = Vert::per_vertex()
+            .definition(&vs.info().input_interface)
+            .unwrap();
+
+        let stages = [
+            PipelineShaderStageCreateInfo::new(vs),
+            PipelineShaderStageCreateInfo::new(fs)
+        ];
+
+        let vk_device = self.vk_virtual_GPU.as_ref().unwrap().0.clone();
+
+        let layout = PipelineLayout::new(
+            vk_device.clone(), 
+            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages).into_pipeline_layout_create_info(vk_device.clone()).unwrap()
+        ).unwrap();
+
+        let subpass = Subpass::from(self.render_pass.as_ref().unwrap().clone(), 0).unwrap();
+
+        let graphic_pipeline = GraphicsPipeline::new(
+            vk_device.clone(), 
+            None, 
+            GraphicsPipelineCreateInfo{
+                stages: stages.into_iter().collect(),
+                vertex_input_state: Some(vert_input), 
+                input_assembly_state: Some(InputAssemblyState::default()),
+                rasterization_state: Some(RasterizationState::default()),
+                multisample_state: Some(MultisampleState::default()),
+                color_blend_state: Some(ColorBlendState::with_attachment_states(
+                subpass.num_color_attachments(),
+                ColorBlendAttachmentState::default(),
+                )),
+                subpass: Some(subpass.into()),
+                viewport_state: Some(ViewportState {
+                    viewports: [viewport].into_iter().collect(),
+                    ..Default::default()
+                }),
+                ..GraphicsPipelineCreateInfo::layout(layout)
+            }
+        ).unwrap();
+
+        self.render_pipeline = Some(graphic_pipeline);
+    }
+
+    fn RenderFormatOr(&mut self, fallback: Format) -> Format {
+        //since the render output image might not exist or be valid
+        if self.render_img.is_some() {
+            self.render_img.as_ref().unwrap().0.format()
+        } else { fallback }
+    }
 }
 
 impl ApplicationHandler for Application {
@@ -140,8 +300,42 @@ impl ApplicationHandler for Application {
             self.BuildSwapchain();
 
             self.memory_allocator = Some(Arc::from(StandardMemoryAllocator::new_default(self.vk_virtual_GPU.as_ref().unwrap().0.clone())));
+            self.command_allocator = Some(StandardCommandBufferAllocator::new(
+                self.vk_virtual_GPU.as_ref().unwrap().0.clone(),
+                 StandardCommandBufferAllocatorCreateInfo::default()));
 
             self.vert_buffer = Some(DefaultVertexBuffer(self.memory_allocator.as_ref().unwrap().clone()));
+
+            self.BuildRenderPass();
+            self.BuildPipeline();
+
+            let mut command_builder = AutoCommandBufferBuilder::primary(
+                self.command_allocator.as_ref().unwrap(), 
+                self.vk_GPU.as_ref().unwrap().1[0],
+                CommandBufferUsage::OneTimeSubmit).unwrap();
+
+            command_builder
+                .begin_render_pass(
+                    RenderPassBeginInfo{
+                        clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
+                        ..RenderPassBeginInfo::framebuffer(self.render_buffer.as_ref().unwrap().clone())
+                    }, 
+                    SubpassBeginInfo{
+                        contents: SubpassContents::Inline,
+                        ..Default::default()
+                    }).unwrap()
+                    .bind_pipeline_graphics(self.render_pipeline.as_ref().unwrap().clone())
+                    .unwrap()
+                    .bind_vertex_buffers(0, self.vert_buffer.as_ref().unwrap().clone())
+                    .unwrap()
+                    .draw(
+                        3, 1, 0, 0, // 3 is the number of vertices, 1 is the number of instances
+                    )
+                    .unwrap()
+                    .end_render_pass(SubpassEndInfo::default())
+                    .unwrap();
+
+            let commandbuffer = command_builder.build().unwrap();
         }
         //this is the start of the app
     }
@@ -152,11 +346,13 @@ impl ApplicationHandler for Application {
             window_id: winit::window::WindowId,
             event: winit::event::WindowEvent,
         ) {
+        match event {
+            WindowEvent::CloseRequested => { event_loop.exit() }
+            _ => { }
+        }
         
     }
 }
-
-
 
 
 //Sets up connection to GPU
