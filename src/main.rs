@@ -1,14 +1,13 @@
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, 
-    command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, 
-    AutoCommandBufferBuilder, CommandBufferUsage, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, 
+    command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, 
     device::{
         physical::PhysicalDevice, 
         Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::Format, image::{
-        view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageSubresourceRange, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::{self, ShaderModule}, swapchain::{ColorSpace, CompositeAlpha, PresentMode, Surface, Swapchain, SwapchainCreateInfo}, NonExhaustive 
+        view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentMode, Surface, Swapchain, SwapchainCreateInfo}, Validated, VulkanError, 
 };
 use winit::{
-    application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop}, window::{Window, WindowAttributes}};
+    application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy}, window::{Window, WindowAttributes}};
 use std::{str::FromStr, sync::Arc};
 
 mod vs {
@@ -47,16 +46,18 @@ static WINDOW_INIT_HEIGHT : u32 = 400;
 fn main() {
     //1 Connect to GPU
     
-    let event_loop: EventLoop<_> = EventLoop::new().unwrap();
+    let event_loop: EventLoop<UserEvent> = EventLoop::<UserEvent>::with_user_event().build().unwrap();
+    let proxy_loop: winit::event_loop::EventLoopProxy<UserEvent> = event_loop.create_proxy();
 
     let vulkan_driver = initialize_vulkano(&event_loop);
 
     let mut render_app: Application = Application {
         vk_driver: vulkan_driver,
+        event_loop_proxy: Some(proxy_loop),
         window_create_info: Window::default_attributes()
             .with_blur(false)
             .with_inner_size(LogicalSize::new(WINDOW_INIT_WIDTH, WINDOW_INIT_HEIGHT))
-            .with_resizable(false)
+            .with_resizable(true)
             .with_title(String::from_str("Test Renderer").unwrap())
             .with_maximized(false)
             .with_visible(true)
@@ -87,6 +88,11 @@ fn main() {
     //flush commands buffer, synchronize, present the swapchain
 }
 
+#[derive(Debug, Clone, Copy)]
+enum UserEvent {
+    Render
+}
+
 #[derive(BufferContents, Vertex)]
 #[repr(C)]
 struct Vert {
@@ -96,9 +102,11 @@ struct Vert {
 
 struct Application {
     vk_driver : Arc<Instance>,
-    vk_GPU : Option<(Arc<PhysicalDevice>, Vec<u32>)>,
-    vk_virtual_GPU : Option<(Arc<Device>, Vec<Arc<Queue>>)>,
+    vk_gpu : Option<(Arc<PhysicalDevice>, Vec<u32>)>,
+    vk_virtual_gpu : Option<(Arc<Device>, Vec<Arc<Queue>>)>,
 
+    swapchain_invalid : bool,
+    event_loop_proxy : Option<EventLoopProxy<UserEvent>>,
     window_create_info : WindowAttributes,
     window_main : Option<(Arc<Window>, Arc<Surface>)>,
     swapchain : Option<(Arc<Swapchain>, Vec<Arc<Image>>)>,
@@ -112,15 +120,17 @@ struct Application {
     vert_shader : Option<Arc<ShaderModule>>,
     frag_shader : Option<Arc<ShaderModule>>,
 
-    render_pipeline : Option<Arc<GraphicsPipeline>>
+    render_pipeline : Option<Arc<GraphicsPipeline>>,
+    command_buffers : Option<Vec<Arc<PrimaryAutoCommandBuffer>>>
 }
 
 impl Default for Application {
     fn default() -> Self {
         Self { 
             vk_driver: {vulkano::instance::Instance::new(vulkano::VulkanLibrary::new().unwrap(), InstanceCreateInfo::default()).unwrap()}, 
-            vk_GPU: None,
-            vk_virtual_GPU: None, 
+            vk_gpu: None,
+            vk_virtual_gpu: None, 
+            event_loop_proxy: None,
             window_create_info: WindowAttributes::default(), 
             window_main: None, 
             swapchain: None, 
@@ -131,7 +141,9 @@ impl Default for Application {
             render_buffers: None, 
             vert_shader: None, 
             frag_shader: None, 
-            render_pipeline: None }
+            render_pipeline: None,
+            command_buffers: None,
+            swapchain_invalid: false }
     }
 }
 
@@ -156,11 +168,11 @@ impl Application {
         let surface = self.window_main.as_ref().unwrap().1.clone();
 
         let device = locate_device(self.vk_driver.clone(), &device_extensions, surface).unwrap();
-        self.vk_GPU = Some(device);
+        self.vk_gpu = Some(device);
     }
 
     fn initialize_virtual_gpu(&mut self) {
-        let (gpu, queue_indices) = self.vk_GPU.as_ref().unwrap().clone();
+        let (gpu, queue_indices) = self.vk_gpu.as_ref().unwrap().clone();
         let virtual_gpu_params : DeviceCreateInfo;
         
         let vk_extensions = DeviceExtensions {
@@ -188,20 +200,20 @@ impl Application {
 
         let queues: Vec<Arc<Queue>> = queues_iter.collect();
 
-        self.vk_virtual_GPU = Some((device, queues))
+        self.vk_virtual_gpu = Some((device, queues))
     }
 
     fn build_swapchain(&mut self) {
-        let (gpu, queues) = self.vk_virtual_GPU.as_ref().unwrap();
+        let (gpu, queues) = self.vk_virtual_gpu.as_ref().unwrap();
         let (window, surface) = self.window_main.as_ref().unwrap();
-        ;
-        let capabilities = self.vk_virtual_GPU.as_ref().unwrap().0
+        
+        let capabilities = self.vk_virtual_gpu.as_ref().unwrap().0
             .physical_device()
             .surface_capabilities(surface, Default::default())
             .unwrap();
-        let window_size : [u32; 2] = [window.inner_size().width, window.inner_size().height];
+        let window_size = self.window_extend();
         let composite_alpha = capabilities.supported_composite_alpha.into_iter().next().unwrap();
-        let format = self.vk_GPU.as_ref().unwrap().0
+        let format = self.vk_gpu.as_ref().unwrap().0
         .surface_formats(&surface, Default::default())
         .unwrap()[0]
         .0;
@@ -222,7 +234,7 @@ impl Application {
 
     fn build_renderpass(&mut self) {
         let render_pass : Arc<RenderPass> = vulkano::single_pass_renderpass!(
-            self.vk_virtual_GPU.as_ref().unwrap().0.clone(),
+            self.vk_virtual_gpu.as_ref().unwrap().0.clone(),
             attachments: {
                 color: {
                     format: self.render_format_or(Format::R8G8B8A8_UNORM),
@@ -275,7 +287,7 @@ impl Application {
     }
 
     fn compile_shaders(&mut self) {
-        let gpu = self.vk_virtual_GPU.as_ref().unwrap().0.clone();
+        let gpu = self.vk_virtual_gpu.as_ref().unwrap().0.clone();
         self.vert_shader = Some(vs::load(gpu.clone()).unwrap());
         self.frag_shader = Some(fs::load(gpu.clone()).unwrap());
     }
@@ -301,7 +313,7 @@ impl Application {
             PipelineShaderStageCreateInfo::new(fs)
         ];
 
-        let vk_device = self.vk_virtual_GPU.as_ref().unwrap().0.clone();
+        let vk_device = self.vk_virtual_gpu.as_ref().unwrap().0.clone();
 
         let layout = PipelineLayout::new(
             vk_device.clone(), 
@@ -335,6 +347,95 @@ impl Application {
         self.render_pipeline = Some(graphic_pipeline);
     }
 
+    fn build_command_buffers(&mut self) {
+        let framebuffers = self.render_buffers.as_ref().unwrap().clone();
+        let command_allocator = self.command_allocator.as_ref().unwrap().clone();
+        let queue_index = self.vk_virtual_gpu.as_ref().unwrap().1.clone()[0].queue_family_index();
+        let pipeline = self.render_pipeline.as_ref().unwrap().clone();
+        let vert_buffer = self.vert_buffer.as_ref().unwrap().clone();
+
+        let new_command_buffers : Vec<Arc<PrimaryAutoCommandBuffer>> = framebuffers
+            .iter()
+            .map(|framebuffer| { 
+                let mut builder = AutoCommandBufferBuilder::primary(
+                    command_allocator, 
+                    queue_index, 
+                    CommandBufferUsage::MultipleSubmit).unwrap();
+
+                builder 
+                    .begin_render_pass(
+                        RenderPassBeginInfo {
+                            clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
+                            ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
+                        }, 
+                        SubpassBeginInfo {
+                            contents: SubpassContents::Inline,
+                            ..Default::default()
+                        }
+                    ).unwrap()
+                    .bind_pipeline_graphics(pipeline.clone())
+                    .unwrap()
+                    .bind_vertex_buffers(0, vert_buffer.clone())
+                    .unwrap()
+                    .draw(vert_buffer.len() as u32, 1, 0, 0)
+                    .unwrap()
+                    .end_render_pass(Default::default())
+                    .unwrap();
+
+                    builder.build().unwrap()
+            })
+            .collect();
+
+        self.command_buffers = Some(new_command_buffers);
+    }
+
+    fn rebuild_swapchain(&mut self) {
+        //remakes the swapchain from the previous one with up to date window size
+        //then remakes all the dependent objects
+        let current_swapchain: Arc<Swapchain> = self.swapchain.as_ref().unwrap().0.clone();
+        let new_swapchain: (Arc<Swapchain>, Vec<Arc<Image>>) = current_swapchain.recreate(
+            SwapchainCreateInfo {
+                image_extent: self.window_extend(),
+                ..current_swapchain.create_info()
+            }
+        ).unwrap();
+        self.swapchain = Some(new_swapchain);
+        //rebuild dependencies
+        self.build_framebuffers();
+        self.build_pipeline();
+        self.build_command_buffers();
+        self.swapchain_invalid = false;
+    }
+
+    fn submit_drawcall(&mut self) {
+        let swapchain: Arc<Swapchain> = self.swapchain.as_ref().unwrap().0.clone();
+
+
+        //first acquire the image to draw on from the swapchain
+        let (image_i, suboptimal, acquire_future) =
+                match swapchain::acquire_next_image(swapchain.clone(), None)
+                    .map_err(Validated::unwrap)
+                {
+                    Ok(r) => r,
+                    Err(VulkanError::OutOfDate) => {
+                        self.swapchain_invalid = true;
+                        return;
+                    }
+                    Err(e) => panic!("failed to acquire next image: {e}"),
+                };
+        if suboptimal { self.swapchain_invalid = true; }
+
+
+        //FUTURE SHENNANIGANS
+
+        self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
+    }
+
+    fn window_extend(&self) -> [u32; 2] {
+        let window = self.window_main.as_ref().unwrap().0.clone();
+        return [window.inner_size().width, window.inner_size().height]
+    }
+
     fn render_format_or(&mut self, fallback: Format) -> Format {
         //since the render output image might not exist or be valid
         if self.swapchain.is_some() {
@@ -343,57 +444,44 @@ impl Application {
     }
 }
 
-impl ApplicationHandler for Application {
+impl ApplicationHandler<UserEvent> for Application {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window_main.is_none() {
+            println!("pre window build");
             self.build_window(event_loop);
+            println!("post window build");
 
-            if self.vk_GPU.is_none() { self.initialize_gpu(); }
-            if self.vk_virtual_GPU.is_none() { self.initialize_virtual_gpu(); }
+            if self.vk_gpu.is_none() { self.initialize_gpu(); }
+            if self.vk_virtual_gpu.is_none() { self.initialize_virtual_gpu(); }
             
-            self.build_swapchain();
 
-            self.memory_allocator = Some(Arc::from(StandardMemoryAllocator::new_default(self.vk_virtual_GPU.as_ref().unwrap().0.clone())));
+            self.memory_allocator = Some(Arc::from(StandardMemoryAllocator::new_default(self.vk_virtual_gpu.as_ref().unwrap().0.clone())));
             self.command_allocator = Some(StandardCommandBufferAllocator::new(
-                self.vk_virtual_GPU.as_ref().unwrap().0.clone(),
+                self.vk_virtual_gpu.as_ref().unwrap().0.clone(),
                  StandardCommandBufferAllocatorCreateInfo::default()));
 
             self.vert_buffer = Some(default_vertex_buffer(self.memory_allocator.as_ref().unwrap().clone()));
 
+            self.build_swapchain();
             self.build_renderpass();
             self.build_framebuffers();
             self.compile_shaders();
             self.build_pipeline();
-
-            let mut command_builder = AutoCommandBufferBuilder::primary(
-                self.command_allocator.as_ref().unwrap(), 
-                self.vk_GPU.as_ref().unwrap().1[0],
-                CommandBufferUsage::OneTimeSubmit).unwrap();
-
-            command_builder
-                .begin_render_pass(
-                    RenderPassBeginInfo{
-                        clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
-                        ..RenderPassBeginInfo::framebuffer(self.render_buffers.as_ref().unwrap()[0].clone())
-                    }, 
-                    SubpassBeginInfo{
-                        contents: SubpassContents::Inline,
-                        ..Default::default()
-                    }).unwrap()
-                    .bind_pipeline_graphics(self.render_pipeline.as_ref().unwrap().clone())
-                    .unwrap()
-                    .bind_vertex_buffers(0, self.vert_buffer.as_ref().unwrap().clone())
-                    .unwrap()
-                    .draw(
-                        3, 1, 0, 0, // 3 is the number of vertices, 1 is the number of instances
-                    )
-                    .unwrap()
-                    .end_render_pass(SubpassEndInfo::default())
-                    .unwrap();
-
-            let commandbuffer = command_builder.build().unwrap();
+            self.build_command_buffers();
+            
+            self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
         }
         //this is the start of the app
+    }
+
+    fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
+        println!("user event received");
+        match event {
+            UserEvent::Render => { 
+                if self.swapchain_invalid { self.rebuild_swapchain(); } 
+                self.submit_drawcall(); 
+            }
+        }
     }
 
     fn window_event(
@@ -404,7 +492,7 @@ impl ApplicationHandler for Application {
         ) {
         match event {
             WindowEvent::CloseRequested => { event_loop.exit() }
-            WindowEvent::RedrawRequested => {}
+            WindowEvent::RedrawRequested => { println!("Redraw Request"); self.swapchain_invalid = true; }
             _ => { }
         }
         
@@ -413,7 +501,7 @@ impl ApplicationHandler for Application {
 
 
 //Sets up connection to GPU
-fn initialize_vulkano(event_loop : &EventLoop<()>) -> Arc<Instance> {
+fn initialize_vulkano(event_loop : &EventLoop<UserEvent>) -> Arc<Instance> {
     let vk_library = VulkanLibrary::new().expect("failed to make vulkan library"); 
     
     //get gpu driver (instance)
@@ -437,7 +525,7 @@ fn locate_device(vk_driver : Arc<Instance>, extensions : &DeviceExtensions, wind
     
     //get all devices
     //select one to be the logical device
-    let mut graphics_processors : Vec<Arc<PhysicalDevice>> = vk_driver.enumerate_physical_devices()
+    let graphics_processors : Vec<Arc<PhysicalDevice>> = vk_driver.enumerate_physical_devices()
         .unwrap()
         .collect();
 
