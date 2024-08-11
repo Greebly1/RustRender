@@ -1,10 +1,8 @@
 use vulkano::{
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, 
-    command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, 
-    device::{
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, device::{
         physical::PhysicalDevice, 
         Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::Format, image::{
-        view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentMode, Surface, Swapchain, SwapchainCreateInfo}, Validated, VulkanError, 
+        view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentMode, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::FenceSignalFuture, GpuFuture}, Validated, VulkanError 
 };
 use winit::{
     application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy}, window::{Window, WindowAttributes}};
@@ -34,7 +32,7 @@ mod fs {
             layout(location = 0) out vec4 f_color;
 
             void main() {
-                f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                f_color = vec4(1.0, 1.0, 1.0, 1.0);
             }
         ",
     }
@@ -365,7 +363,7 @@ impl Application {
                 builder 
                     .begin_render_pass(
                         RenderPassBeginInfo {
-                            clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
+                            clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into())],
                             ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
                         }, 
                         SubpassBeginInfo {
@@ -409,7 +407,8 @@ impl Application {
 
     fn submit_drawcall(&mut self) {
         let swapchain: Arc<Swapchain> = self.swapchain.as_ref().unwrap().0.clone();
-
+        let (device, queue) = self.vk_virtual_gpu.as_ref().unwrap().clone();
+        let command = self.command_buffers.as_ref().unwrap().clone();
 
         //first acquire the image to draw on from the swapchain
         let (image_i, suboptimal, acquire_future) =
@@ -425,10 +424,21 @@ impl Application {
                 };
         if suboptimal { self.swapchain_invalid = true; }
 
-
+        println!("rendering");
         //FUTURE SHENNANIGANS
+        let execution = sync::now(device.clone())
+                .join(acquire_future)
+                .then_execute(queue[0].clone(), command[image_i as usize].clone())
+                .unwrap()
+                .then_swapchain_present(
+                    queue[0].clone(), 
+                    SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i))
+                .then_signal_fence_and_flush();
 
-        self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
+        execution.unwrap().wait(None).unwrap();
+
+        //uncomment when I figure out how to do frames in flight
+        //self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
     }
 
     fn window_extend(&self) -> [u32; 2] {
@@ -563,9 +573,9 @@ fn locate_device(vk_driver : Arc<Instance>, extensions : &DeviceExtensions, wind
 }
 
 fn default_vertex_buffer(mem_allocator : Arc<dyn MemoryAllocator>) -> Subbuffer<[Vert]>{
-    let vert1 = Vert { position: [-1.0, -1.0] };
-    let vert2 = Vert { position: [1.0, -1.0] };
-    let vert3 = Vert { position: [-1.0, 1.0] };
+    let vert1 = Vert { position: [-0.5, -0.5] };
+    let vert2 = Vert { position: [0.0, 0.5] };
+    let vert3 = Vert { position: [0.5, -0.25] };
 
     return Buffer::from_iter(
         mem_allocator, 
