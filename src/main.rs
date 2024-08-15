@@ -2,14 +2,14 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, device::{
         physical::PhysicalDevice, 
         Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::Format, image::{
-        view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::RasterizationState, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentMode, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::FenceSignalFuture, GpuFuture}, Validated, VulkanError 
+        view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentMode, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::FenceSignalFuture, GpuFuture}, Validated, VulkanError 
 };
 use winit::{
     application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy}, window::{Window, WindowAttributes}};
 use std::{str::FromStr, sync::Arc};
 
 mod vs {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "vertex",
         src: r"
             #version 460
@@ -24,15 +24,15 @@ mod vs {
 }
 
 mod fs {
-    vulkano_shaders::shader!{
+    vulkano_shaders::shader! {
         ty: "fragment",
-        src: "
+        src: r"
             #version 460
 
             layout(location = 0) out vec4 f_color;
 
             void main() {
-                f_color = vec4(1.0, 1.0, 1.0, 1.0);
+                f_color = vec4(1.0, 0.0, 0.0, 1.0);
             }
         ",
     }
@@ -95,7 +95,7 @@ enum UserEvent {
 #[repr(C)]
 struct Vert {
     #[format(R32G32_SFLOAT)]
-    position: [f32; 2]
+    position: [f32; 2],
 }
 
 struct Application {
@@ -260,26 +260,17 @@ impl Application {
 
         let render_buffers : Vec<Arc<Framebuffer>> = swapchain.1.into_iter().map(|img| {
             let img_format = img.format();
-            let img_view = ImageView::new(
-                img.clone(),
-                ImageViewCreateInfo {
-                    view_type: ImageViewType::Dim2d,
-                    format: img_format,
-                    usage: ImageUsage::COLOR_ATTACHMENT,
-                    subresource_range: img.subresource_range(),
-                    ..Default::default()
-                },
-            ).unwrap();
+            let img_view = ImageView::new_default(img.clone())
+            .unwrap();
 
             Framebuffer::new(
                 render_pass.clone(),
                 FramebufferCreateInfo {
                     attachments: vec![img_view],
-                    extent: [window_size.width, window_size.height],
                     ..Default::default()
                 }
             ).unwrap()
-        }).collect();
+        }).collect::<Vec<_>>();
 
         self.render_buffers = Some(render_buffers);
     }
@@ -295,7 +286,7 @@ impl Application {
 
         let viewport = Viewport {
             offset: [0.0, 0.0],
-            extent: [f32::from_bits(window_size.width), f32::from_bits(window_size.height)],
+            extent: [window_size.width as f32, window_size.height as f32],
             depth_range: 0.0..=1.0, //<-- since the format is UNORM I think
         };
         
@@ -320,6 +311,14 @@ impl Application {
 
         let subpass = Subpass::from(self.render_pass.as_ref().unwrap().clone(), 0).unwrap();
 
+        let rasterize_stage = RasterizationState {
+            depth_clamp_enable: false,
+            rasterizer_discard_enable: false,
+            polygon_mode: PolygonMode::Fill,
+            cull_mode: CullMode::None,
+            ..Default::default()
+        };
+
         let graphic_pipeline = GraphicsPipeline::new(
             vk_device.clone(), 
             None, 
@@ -327,7 +326,7 @@ impl Application {
                 stages: stages.into_iter().collect(),
                 vertex_input_state: Some(vert_input), 
                 input_assembly_state: Some(InputAssemblyState::default()),
-                rasterization_state: Some(RasterizationState::default()),
+                rasterization_state: Some(rasterize_stage),
                 multisample_state: Some(MultisampleState::default()),
                 color_blend_state: Some(ColorBlendState::with_attachment_states(
                 subpass.num_color_attachments(),
@@ -363,7 +362,7 @@ impl Application {
                 builder 
                     .begin_render_pass(
                         RenderPassBeginInfo {
-                            clear_values: vec![Some([0.0, 0.0, 0.0, 1.0].into())],
+                            clear_values: vec![Some([0.0, 0.0, 1.0, 1.0].into())],
                             ..RenderPassBeginInfo::framebuffer(framebuffer.clone())
                         }, 
                         SubpassBeginInfo {
@@ -375,7 +374,7 @@ impl Application {
                     .unwrap()
                     .bind_vertex_buffers(0, vert_buffer.clone())
                     .unwrap()
-                    .draw(vert_buffer.len() as u32, 1, 0, 0)
+                    .draw(3, 1, 0, 0)
                     .unwrap()
                     .end_render_pass(Default::default())
                     .unwrap();
@@ -449,8 +448,9 @@ impl Application {
     fn render_format_or(&mut self, fallback: Format) -> Format {
         //since the render output image might not exist or be valid
         if self.swapchain.is_some() {
-            self.swapchain.as_ref().unwrap().0.image_format()
-        } else { fallback }
+            println!("swapchain is some");
+            return self.swapchain.as_ref().unwrap().0.image_format()
+        } else { return fallback }
     }
 }
 
