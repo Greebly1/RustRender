@@ -310,13 +310,18 @@ impl Application {
             ..Default::default()
         };
 
+        let inputstate = InputAssemblyState{
+            topology: vulkano::pipeline::graphics::input_assembly::PrimitiveTopology::TriangleStrip,
+            ..Default::default()
+        };
+
         let graphic_pipeline = GraphicsPipeline::new(
             vk_device.clone(), 
             None, 
             GraphicsPipelineCreateInfo{
                 stages: stages.into_iter().collect(),
                 vertex_input_state: Some(vert_input), 
-                input_assembly_state: Some(InputAssemblyState::default()),
+                input_assembly_state: Some(inputstate),
                 rasterization_state: Some(rasterize_stage),
                 multisample_state: Some(MultisampleState::default()),
                 color_blend_state: Some(ColorBlendState::with_attachment_states(
@@ -365,7 +370,7 @@ impl Application {
                     .unwrap()
                     .bind_vertex_buffers(0, vert_buffer.clone())
                     .unwrap()
-                    .draw(3, 1, 0, 0)
+                    .draw(4, 1, 0, 0)
                     .unwrap()
                     .end_render_pass(Default::default())
                     .unwrap();
@@ -598,9 +603,10 @@ fn locate_device(vk_driver : Arc<Instance>, extensions : &DeviceExtensions, wind
 }
 
 fn default_vertex_buffer(mem_allocator : Arc<dyn MemoryAllocator>) -> Subbuffer<[Vert]>{
-    let vert1 = Vert { position: [-0.5, -0.5] };
-    let vert2 = Vert { position: [0.0, 0.5] };
-    let vert3 = Vert { position: [0.5, -0.25] };
+    let vert1 = Vert { position: [-1.0, -1.0] };
+    let vert2 = Vert { position: [-1.0, 1.0] };
+    let vert3 = Vert { position: [1.0, -1.0] };
+    let vert4 = Vert { position: [1.0, 1.0] };
 
     return Buffer::from_iter(
         mem_allocator, 
@@ -612,6 +618,6 @@ fn default_vertex_buffer(mem_allocator : Arc<dyn MemoryAllocator>) -> Subbuffer<
             memory_type_filter: MemoryTypeFilter::PREFER_DEVICE | MemoryTypeFilter::HOST_SEQUENTIAL_WRITE,
             ..Default::default()
         }, 
-        vec![vert1, vert2, vert3])
+        vec![vert1, vert2, vert3, vert4])
         .unwrap();
 }
