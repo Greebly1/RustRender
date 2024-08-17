@@ -2,11 +2,12 @@ use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, device::{
         physical::PhysicalDevice, 
         Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::{self, Format}, image::{
-        view::ImageView, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentFuture, PresentMode, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::{FenceSignalFuture, JoinFuture, NowFuture}, GpuFuture}, Validated, VulkanError 
+        view::ImageView, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::{PipelineDescriptorSetLayoutCreateInfo, PipelineLayoutCreateInfo, PushConstantRange}, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::{ShaderModule, ShaderStage, ShaderStages}, swapchain::{self, PresentFuture, PresentMode, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::{FenceSignalFuture, JoinFuture, NowFuture}, GpuFuture}, Validated, VulkanError 
 };
 use winit::{
     application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy}, window::{Window, WindowAttributes}};
 use std::{str::FromStr, sync::{Arc, RwLock}, thread::{self, sleep, JoinHandle}, time::Duration};
+use chrono;
 
 mod vs {
     vulkano_shaders::shader! {
@@ -34,9 +35,14 @@ mod fs {
 
             layout(location = 0) out vec4 f_color;
             layout(location = 0) in vec2 frag_coord;
+            layout( push_constant ) uniform constants 
+            {
+                float time;
+            } PushConstants;
 
             void main() {
-                f_color = vec4(frag_coord, 0.0, 1.0);
+                vec3 col = 0.5 + 0.5*cos(PushConstants.time/300.0+frag_coord.xyx+vec3(0,2,4));
+                f_color = vec4(col, 1.0);
             }
         ",
     }
@@ -85,6 +91,11 @@ struct Vert {
     #[format(R32G32_SFLOAT)]
     uv: [f32; 2]
 }
+#[repr(C)]
+#[derive(BufferContents)]
+struct PushConstants {
+    time : f32
+}
 
 struct Application {
     vk_driver : Arc<Instance>,
@@ -101,13 +112,14 @@ struct Application {
     vert_buffer : Option<Subbuffer<[Vert]>>,
     render_pass : Option<Arc<RenderPass>>,
     render_buffers : Option<Vec<Arc<Framebuffer>>>,
+    render_pipeline_layout : Option<Arc<PipelineLayout>>,
 
     vert_shader : Option<Arc<ShaderModule>>,
     frag_shader : Option<Arc<ShaderModule>>,
 
     render_pipeline : Option<Arc<GraphicsPipeline>>,
     command_buffers : Option<Vec<Arc<PrimaryAutoCommandBuffer>>>,
-    current_time : u32,
+    current_time : f32,
     render_notify_thread : Option<JoinHandle<()>>,
     render_fence : Arc<RwLock<Option<Arc<FenceSignalFuture<PresentFuture<CommandBufferExecFuture<JoinFuture<NowFuture, SwapchainAcquireFuture>>>>>>>>,
     continue_render : Arc<RwLock<bool>>,
@@ -135,10 +147,11 @@ impl Default for Application {
             render_pipeline: None,
             command_buffers: None,
             swapchain_invalid: false,
-            current_time: 0,
+            current_time: 0.0,
             render_notify_thread : None,
             render_fence : Arc::new(RwLock::new(None)),
-            continue_render : Arc::new(RwLock::new(true))
+            continue_render : Arc::new(RwLock::new(true)),
+            render_pipeline_layout : None
         }
     }
 }
@@ -295,6 +308,12 @@ impl Application {
             .definition(&vs.info().input_interface)
             .unwrap();
 
+        let push_constants = PushConstantRange {
+            offset: 0,
+            size: 4,
+            stages: ShaderStages::FRAGMENT
+        };
+
         let stages = [
             PipelineShaderStageCreateInfo::new(vs),
             PipelineShaderStageCreateInfo::new(fs)
@@ -302,10 +321,17 @@ impl Application {
 
         let vk_device = self.vk_virtual_gpu.as_ref().unwrap().0.clone();
 
+        let layout_create_info = PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages);
+
         let layout = PipelineLayout::new(
             vk_device.clone(), 
-            PipelineDescriptorSetLayoutCreateInfo::from_stages(&stages).into_pipeline_layout_create_info(vk_device.clone()).unwrap()
+            PipelineDescriptorSetLayoutCreateInfo{
+                push_constant_ranges: vec![push_constants],
+                flags: layout_create_info.flags,
+                set_layouts: layout_create_info.set_layouts
+            }.into_pipeline_layout_create_info(vk_device.clone()).unwrap()
         ).unwrap();
+        self.render_pipeline_layout = Some(layout.clone());
 
         let subpass = Subpass::from(self.render_pass.as_ref().unwrap().clone(), 0).unwrap();
 
@@ -326,6 +352,7 @@ impl Application {
             vk_device.clone(), 
             None, 
             GraphicsPipelineCreateInfo{
+                
                 stages: stages.into_iter().collect(),
                 vertex_input_state: Some(vert_input), 
                 input_assembly_state: Some(inputstate),
@@ -351,8 +378,9 @@ impl Application {
         let framebuffers = self.render_buffers.as_ref().unwrap().clone();
         let command_allocator = self.command_allocator.as_ref().unwrap().clone();
         let queue_index = self.vk_virtual_gpu.as_ref().unwrap().1.clone()[0].queue_family_index();
-        let pipeline = self.render_pipeline.as_ref().unwrap().clone();
+        let graphics_pipeline = self.render_pipeline.as_ref().unwrap().clone();
         let vert_buffer = self.vert_buffer.as_ref().unwrap().clone();
+        let graphic_pipeline_layout = self.render_pipeline_layout.as_ref().unwrap().clone();
 
         let new_command_buffers : Vec<Arc<PrimaryAutoCommandBuffer>> = framebuffers
             .iter()
@@ -373,9 +401,11 @@ impl Application {
                             ..Default::default()
                         }
                     ).unwrap()
-                    .bind_pipeline_graphics(pipeline.clone())
+                    .bind_pipeline_graphics(graphics_pipeline.clone())
                     .unwrap()
                     .bind_vertex_buffers(0, vert_buffer.clone())
+                    .unwrap()
+                    .push_constants(graphic_pipeline_layout.clone(), 0, PushConstants{time: self.current_time})
                     .unwrap()
                     .draw(4, 1, 0, 0)
                     .unwrap()
@@ -408,6 +438,7 @@ impl Application {
     }
 
     fn submit_drawcall(&mut self) {
+        
         let swapchain: Arc<Swapchain> = self.swapchain.as_ref().unwrap().0.clone();
         let (device, queue) = self.vk_virtual_gpu.as_ref().unwrap().clone();
         let command = self.command_buffers.as_ref().unwrap().clone();
@@ -439,6 +470,7 @@ impl Application {
 
         let mut thing = self.render_fence.write().unwrap();
         *thing = Some(Arc::new(execution.unwrap()));
+        self.current_time = self.current_time + 3.0;
 
         //uncomment when I figure out how to do frames in flight
         //self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
@@ -516,7 +548,8 @@ impl ApplicationHandler<UserEvent> for Application {
         println!("user event received");
         match event {
             UserEvent::Render => { 
-                if self.swapchain_invalid { self.rebuild_swapchain(); } 
+                //if self.swapchain_invalid { self.rebuild_swapchain(); } 
+                self.rebuild_swapchain();
                 self.submit_drawcall(); 
             }
         }
