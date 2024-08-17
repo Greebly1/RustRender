@@ -1,12 +1,12 @@
 use vulkano::{
-    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, device::{
+    buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, device::{
         physical::PhysicalDevice, 
         Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::Format, image::{
-        view::{ImageView, ImageViewCreateInfo, ImageViewType}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentMode, Surface, Swapchain, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::FenceSignalFuture, GpuFuture}, Validated, VulkanError 
+        view::{ImageView}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentFuture, PresentMode, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::{FenceSignalFuture, JoinFuture, NowFuture}, GpuFuture}, Validated, VulkanError 
 };
 use winit::{
     application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy}, window::{Window, WindowAttributes}};
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::{Arc, RwLock}, thread::{self, sleep, JoinHandle}, time::Duration};
 
 mod vs {
     vulkano_shaders::shader! {
@@ -51,7 +51,7 @@ fn main() {
 
     let mut render_app: Application = Application {
         vk_driver: vulkan_driver,
-        event_loop_proxy: Some(proxy_loop),
+        event_loop_proxy: Some(Arc::new(RwLock::new(proxy_loop))),
         window_create_info: Window::default_attributes()
             .with_blur(false)
             .with_inner_size(LogicalSize::new(WINDOW_INIT_WIDTH, WINDOW_INIT_HEIGHT))
@@ -65,25 +65,6 @@ fn main() {
 
     event_loop.run_app(&mut render_app).unwrap();
 
-
-    //2 create window
-
-
-    //3 create render pass
-        //render pass
-        //frame buffers
-
-    //4 create vertex buffer
-
-
-    //5 create pipeline
-        //compile shaders
-        //subpasses
-
-    //6 create command buffers
-
-    //7 swapchain, make the render pass with the swapchain image
-    //flush commands buffer, synchronize, present the swapchain
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -104,7 +85,6 @@ struct Application {
     vk_virtual_gpu : Option<(Arc<Device>, Vec<Arc<Queue>>)>,
 
     swapchain_invalid : bool,
-    event_loop_proxy : Option<EventLoopProxy<UserEvent>>,
     window_create_info : WindowAttributes,
     window_main : Option<(Arc<Window>, Arc<Surface>)>,
     swapchain : Option<(Arc<Swapchain>, Vec<Arc<Image>>)>,
@@ -119,7 +99,13 @@ struct Application {
     frag_shader : Option<Arc<ShaderModule>>,
 
     render_pipeline : Option<Arc<GraphicsPipeline>>,
-    command_buffers : Option<Vec<Arc<PrimaryAutoCommandBuffer>>>
+    command_buffers : Option<Vec<Arc<PrimaryAutoCommandBuffer>>>,
+    current_time : u32,
+    render_notify_thread : Option<JoinHandle<()>>,
+    render_fence : Arc<RwLock<Option<Arc<FenceSignalFuture<PresentFuture<CommandBufferExecFuture<JoinFuture<NowFuture, SwapchainAcquireFuture>>>>>>>>,
+    continue_render : Arc<RwLock<bool>>,
+    event_loop_proxy : Option<Arc<RwLock<EventLoopProxy<UserEvent>>>>,
+
 }
 
 impl Default for Application {
@@ -141,7 +127,12 @@ impl Default for Application {
             frag_shader: None, 
             render_pipeline: None,
             command_buffers: None,
-            swapchain_invalid: false }
+            swapchain_invalid: false,
+            current_time: 0,
+            render_notify_thread : None,
+            render_fence : Arc::new(RwLock::new(None)),
+            continue_render : Arc::new(RwLock::new(true))
+        }
     }
 }
 
@@ -434,7 +425,8 @@ impl Application {
                     SwapchainPresentInfo::swapchain_image_index(swapchain.clone(), image_i))
                 .then_signal_fence_and_flush();
 
-        execution.unwrap().wait(None).unwrap();
+        let mut thing = self.render_fence.write().unwrap();
+        *thing = Some(Arc::new(execution.unwrap()));
 
         //uncomment when I figure out how to do frames in flight
         //self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
@@ -452,6 +444,7 @@ impl Application {
             return self.swapchain.as_ref().unwrap().0.image_format()
         } else { return fallback }
     }
+
 }
 
 impl ApplicationHandler<UserEvent> for Application {
@@ -479,7 +472,30 @@ impl ApplicationHandler<UserEvent> for Application {
             self.build_pipeline();
             self.build_command_buffers();
             
-            self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
+            let proxy_loop = self.event_loop_proxy.as_ref().unwrap().clone();
+            let render_check = self.continue_render.clone();
+            let fence = self.render_fence.clone();
+            let thread_fn = move || {
+                loop {
+                sleep(Duration::from_millis(10));
+                
+
+                if *render_check.read().unwrap() { 
+                    let render_fence = fence.read().unwrap().clone();
+                    if let Some(fence) = render_fence {
+                        fence.wait(None).unwrap();
+                    }
+                    
+                    proxy_loop.write().unwrap().send_event(UserEvent::Render).unwrap();
+                } else {
+                    break;
+                }
+                }
+            };
+
+            self.render_notify_thread = Some( 
+                thread::spawn(thread_fn)
+            );
         }
         //this is the start of the app
     }
@@ -501,8 +517,17 @@ impl ApplicationHandler<UserEvent> for Application {
             event: winit::event::WindowEvent,
         ) {
         match event {
-            WindowEvent::CloseRequested => { event_loop.exit() }
-            WindowEvent::RedrawRequested => { println!("Redraw Request"); self.swapchain_invalid = true; }
+            WindowEvent::CloseRequested => { 
+                *self.continue_render.write().unwrap() = false;
+                self.render_notify_thread.take().unwrap().join().unwrap();
+                event_loop.exit() 
+            }
+            WindowEvent::RedrawRequested => { 
+                println!("Redraw Request"); 
+                self.swapchain_invalid = true; 
+                //self.event_loop_proxy.as_ref().unwrap().send_event(UserEvent::Render).unwrap();
+
+            }
             _ => { }
         }
         
