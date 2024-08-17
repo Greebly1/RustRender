@@ -1,8 +1,8 @@
 use vulkano::{
     buffer::{Buffer, BufferContents, BufferCreateInfo, BufferUsage, Subbuffer}, command_buffer::{allocator::{StandardCommandBufferAllocator, StandardCommandBufferAllocatorCreateInfo}, AutoCommandBufferBuilder, CommandBufferExecFuture, CommandBufferUsage, PrimaryAutoCommandBuffer, RenderPassBeginInfo, SubpassBeginInfo, SubpassContents, SubpassEndInfo}, device::{
         physical::PhysicalDevice, 
-        Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::Format, image::{
-        view::{ImageView}, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentFuture, PresentMode, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::{FenceSignalFuture, JoinFuture, NowFuture}, GpuFuture}, Validated, VulkanError 
+        Device, DeviceCreateInfo, DeviceExtensions, Features, Queue, QueueCreateInfo, QueueFlags}, format::{self, Format}, image::{
+        view::ImageView, Image, ImageUsage}, instance::{Instance, InstanceCreateInfo}, library::VulkanLibrary, memory::allocator::{AllocationCreateInfo, MemoryAllocator, MemoryTypeFilter, StandardMemoryAllocator}, pipeline::{graphics::{color_blend::{ColorBlendAttachmentState, ColorBlendState}, input_assembly::InputAssemblyState, multisample::MultisampleState, rasterization::{CullMode, PolygonMode, RasterizationState}, vertex_input::{Vertex, VertexDefinition}, viewport::{Viewport, ViewportState}, GraphicsPipelineCreateInfo}, layout::PipelineDescriptorSetLayoutCreateInfo, GraphicsPipeline, PipelineLayout, PipelineShaderStageCreateInfo}, render_pass::{Framebuffer, FramebufferCreateInfo, RenderPass, Subpass}, shader::ShaderModule, swapchain::{self, PresentFuture, PresentMode, Surface, Swapchain, SwapchainAcquireFuture, SwapchainCreateInfo, SwapchainPresentInfo}, sync::{self, future::{FenceSignalFuture, JoinFuture, NowFuture}, GpuFuture}, Validated, VulkanError 
 };
 use winit::{
     application::ApplicationHandler, dpi::LogicalSize, event::WindowEvent, event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy}, window::{Window, WindowAttributes}};
@@ -15,8 +15,11 @@ mod vs {
             #version 460
 
             layout(location = 0) in vec2 position;
+            layout(location = 1) in vec2 uv;
+            layout(location = 0) out vec2 frag_coord;
 
             void main() {
+                frag_coord = uv;
                 gl_Position = vec4(position, 0.0, 1.0);
             }
         ",
@@ -30,9 +33,10 @@ mod fs {
             #version 460
 
             layout(location = 0) out vec4 f_color;
+            layout(location = 0) in vec2 frag_coord;
 
             void main() {
-                f_color = vec4(1.0, 0.0, 0.0, 1.0);
+                f_color = vec4(frag_coord, 0.0, 1.0);
             }
         ",
     }
@@ -77,6 +81,9 @@ enum UserEvent {
 struct Vert {
     #[format(R32G32_SFLOAT)]
     position: [f32; 2],
+
+    #[format(R32G32_SFLOAT)]
+    uv: [f32; 2]
 }
 
 struct Application {
@@ -603,10 +610,10 @@ fn locate_device(vk_driver : Arc<Instance>, extensions : &DeviceExtensions, wind
 }
 
 fn default_vertex_buffer(mem_allocator : Arc<dyn MemoryAllocator>) -> Subbuffer<[Vert]>{
-    let vert1 = Vert { position: [-1.0, -1.0] };
-    let vert2 = Vert { position: [-1.0, 1.0] };
-    let vert3 = Vert { position: [1.0, -1.0] };
-    let vert4 = Vert { position: [1.0, 1.0] };
+    let vert1 = Vert { position: [-1.0, -1.0], uv: [0.0, 0.0] };
+    let vert2 = Vert { position: [-1.0, 1.0], uv: [0.0, 1.0] };
+    let vert3 = Vert { position: [1.0, -1.0] , uv: [1.0, 0.0] };
+    let vert4 = Vert { position: [1.0, 1.0], uv: [1.0, 1.0] };
 
     return Buffer::from_iter(
         mem_allocator, 
